@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 184 96" fill="none" role="img" aria-label="StreixAnalyst">
+  <defs>
+    <linearGradient id="saTop" x1="18" y1="6" x2="86" y2="42" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#A8DBFF"/><stop offset="0.5" stop-color="#55AEFF"/><stop offset="1" stop-color="#2C84F7"/></linearGradient>
+    <linearGradient id="saBot" x1="22" y1="50" x2="92" y2="90" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#3B90FA"/><stop offset="0.55" stop-color="#1A63EC"/><stop offset="1" stop-color="#0A3CC4"/></linearGradient>
+    <linearGradient id="saA" x1="104" y1="90" x2="132" y2="6" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#1A63EC"/><stop offset="0.6" stop-color="#55AEFF"/><stop offset="1" stop-color="#A8DBFF"/></linearGradient>
+    <linearGradient id="saF" x1="134" y1="6" x2="168" y2="90" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#2C84F7"/><stop offset="1" stop-color="#0A3CC4"/></linearGradient>
+  </defs>
+  <path d="M53 6 H88 L59 37 Q55 41.5 49 41.5 H16 L45 10.5 Q48.5 6 53 6 Z" fill="url(#saTop)"/>
+  <path d="M59 48.5 H92 L63 85.5 Q59.5 90 53.5 90 H20 L50 53 Q53.5 48.5 59 48.5 Z" fill="url(#saBot)"/>
+  <path fill-rule="evenodd" d="M126.5 6 H145.5 L172 90 H157.5 L152.6 74.5 H120.4 L115.5 90 H101 Z M124.2 62.5 H148.8 L136.5 23.5 Z" fill="url(#saA)"/>
+  <path d="M136 6 H145.5 L172 90 H157.5 L136.5 23.5 Z" fill="url(#saF)"/>
+  <path d="M121.6 62.5 H156.6 L153.9 74.5 H117.9 Z" fill="#A8DBFF"/>
+</svg>

@@ -1,0 +1,19 @@
+{
+  "name": "streixanalyst-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "StreixAnalyst web app (Next.js) — the AI analyst that reads the chart with you. By Streixcorp.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start -p ${PORT:-3000}"
+  },
+  "dependencies": {
+    "next": "^16.0.10",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  }
+}

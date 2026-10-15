@@ -1,0 +1,20 @@
+# StreixAnalyst API
+fastapi>=0.115
+uvicorn[standard]>=0.30
+sqlalchemy>=2.0.30
+psycopg[binary]>=3.1          # PostgreSQL (DATABASE_URL=postgresql://...)
+httpx>=0.27
+PyJWT>=2.8
+pydantic>=2.7
+python-multipart>=0.0.9
+requests>=2.31
+
+# the Guru analyst (same modules as notebook 6)
+numpy>=1.26
+pandas>=2.2
+joblib>=1.3
+# IMPORTANT: use the SAME scikit-learn version the notebook trained with, or the brain won't load.
+# In Colab run:  import sklearn; print(sklearn.__version__)   and put that exact version here, e.g. scikit-learn==1.6.1
+scikit-learn==1.6.1    # the notebook's version. The server refuses a brain saved with any other version.
+dukascopy-python==4.0.1
+yfinance>=0.2.40
