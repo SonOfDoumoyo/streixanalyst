@@ -99,10 +99,10 @@ def t_health(c):
 def t_signup_rules(c):
     check(c.post("/api/auth/signup", json=dict(email="bad", password="x", first_name="a", last_name="b",
                                                experience="beginner"), headers=H).status_code == 422, "bad email")
-    r = c.post("/api/auth/signup", json=dict(email="a@b.co", password="short", first_name="a", last_name="b",
+    r = c.post("/api/auth/signup", json=dict(email="a@b.co", password="short", first_name="a", last_name="b", accept_terms=True,
                                              experience="beginner"), headers=H)
     check(r.status_code == 422 and "8 characters" in r.json()["detail"], r.text)
-    r = c.post("/api/auth/signup", json=dict(email="a@b.co", password="onlyletters", first_name="a", last_name="b",
+    r = c.post("/api/auth/signup", json=dict(email="a@b.co", password="onlyletters", first_name="a", last_name="b", accept_terms=True,
                                              experience="beginner"), headers=H)
     check(r.status_code == 422, r.text)
     r = c.post("/api/auth/signup", json=dict(email="a@b.co", password="Good-pass1", first_name="a", last_name="b",
@@ -332,7 +332,7 @@ def t_paystack(c):
     r = c.post("/api/billing/checkout", json=dict(plan="pro", months=1, provider="paystack", channel="ussd"), headers=H)
     check(r.status_code == 200 and r.json()["url"].startswith("https://checkout.paystack.com/"), r.text)
     ref = r.json()["reference"]
-    check(PS.tx[ref]["amount"] == 1_500_000 and PS.tx[ref]["channels"] == ["ussd"], PS.tx[ref])
+    check(PS.tx[ref]["amount"] == 2_325_000 and PS.tx[ref]["channels"] == ["ussd"], PS.tx[ref])
     v = c.get(f"/api/billing/verify?reference={ref}").json()
     check(v["result"]["ok"] is False and v["user"]["entitlements"]["tier"] == "trial", v["result"])
     PS.tx[ref]["status"] = "success"
@@ -384,10 +384,10 @@ def t_dva(c):
     r = c.post("/api/billing/dva", headers=H)
     check(r.json()["account"]["account_number"] == "9930000902", r.text)
     it = c.post("/api/billing/dva/intent", json=dict(plan="pro", months=1), headers=H).json()
-    check(it["amount"] == 15000 and it["payment"]["status"] == "pending", it)
+    check(it["amount"] == 23250 and it["payment"]["status"] == "pending", it)
     exp_before = c.get("/api/auth/me").json()["user"]["entitlements"]["plan_expires_at"]
     cust = [k for k, v in PS.customers.items() if v["email"] == "payer@example.com"][0]
-    PS.tx["T_DVA_1"] = dict(status="success", amount=1_500_000, currency="NGN", channel="dedicated_nuban", customer=cust)
+    PS.tx["T_DVA_1"] = dict(status="success", amount=2_325_000, currency="NGN", channel="dedicated_nuban", customer=cust)
     body = json.dumps(dict(event="charge.success", data=dict(reference="T_DVA_1", channel="dedicated_nuban",
                                                              authorization=dict(channel="dedicated_nuban")))).encode()
     r = c.post("/api/billing/paystack/webhook", content=body, headers={"x-paystack-signature": PS.sign(body)})
@@ -407,7 +407,7 @@ def t_manual_and_admin(c):
     check(r.status_code == 200, r.text)
     d = r.json()
     ref = d["payment"]["reference"]
-    check(len(ref) == 8 and ref.startswith("SA") and d["account"]["number"] == "2385227704" and d["amount"] == 60000, d)
+    check(len(ref) == 8 and ref.startswith("SA") and d["account"]["number"] == "2385227704" and d["amount"] == 46500, d)
     check(ref in d["instructions"] and "UBA" in d["instructions"], d["instructions"])
     r = c.post(f"/api/billing/manual/{ref}/proof", data=dict(payer_name="Ada Lovelace"),
                files=dict(file=("receipt.txt", b"hello", "text/plain")), headers=H)
