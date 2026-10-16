@@ -33,7 +33,9 @@ FEATURES = {
     "teach_mode": "Teach mode for presenting to students",
     "branding": "Organization branding",
 }
-FREE_FEATURES = {"analysis", "review", "streixai", "news", "beginner_mode", "tv_mode", "practice", "alerts", "layouts"}
+# Strategies are open to every plan (v1.3): everyone can build, run and save strategies, within the daily limit below.
+FREE_FEATURES = {"analysis", "review", "streixai", "news", "beginner_mode", "tv_mode", "practice", "alerts", "layouts",
+                 "strategy"}
 PRO_FEATURES = set(FEATURES) - {"classroom", "teach_mode", "branding"}
 ORG_FEATURES = set(FEATURES)
 
@@ -41,7 +43,7 @@ LIMIT_NAMES = {"analysis": "analyses", "review": "trade reviews", "ai": "StreixA
                "strategy": "strategy runs", "practice": "draw & score checks", "alerts": "active alerts",
                "watchlist": "watchlist symbols", "layouts": "saved layouts"}
 DEFAULT_LIMITS = {
-    "free": dict(analysis=5, review=2, ai=10, strategy=0, practice=1, alerts=2, watchlist=12, layouts=1),
+    "free": dict(analysis=5, review=2, ai=10, strategy=40, practice=1, alerts=2, watchlist=12, layouts=1),
     "trial": dict(analysis=150, review=60, ai=200, strategy=40, practice=40, alerts=50, watchlist=200, layouts=20),
     "pro": dict(analysis=150, review=60, ai=200, strategy=40, practice=40, alerts=50, watchlist=200, layouts=20),
     "org": dict(analysis=300, review=150, ai=400, strategy=80, practice=100, alerts=100, watchlist=300, layouts=50),

@@ -132,15 +132,16 @@ def candles(symbol, tf, bars=600):
 
 
 def latest(symbol, tf):
-    """The last few candles (incl. the forming one) for live updates. Shared by every viewer for 2 seconds."""
+    """The last few candles (incl. the forming one) for live updates. The chart asks every 5 seconds. Every viewer shares
+    one upstream request per symbol every 5 seconds, which keeps paid data plans (Twelve Data) within their limits."""
     tf = _norm_tf(tf)
     key = (symbol.upper(), tf)
     now = time.time()
     with _latest_lock:
         hit = _latest_cache.get(key)
-        if hit and now - hit[0] < 2.0:
+        if hit and now - hit[0] < 5.0:
             return hit[1]
-    C = _get(symbol, tf, 5, refresh_s=2, min_bars=1)
+    C = _get(symbol, tf, 5, refresh_s=5, min_bars=1)
     rows = candles_payload(C)[-3:]
     out = dict(symbol=symbol, tf=tf, price=C["price"], decimals=C["decimals"], candles=rows, source=C["source"])
     with _latest_lock:

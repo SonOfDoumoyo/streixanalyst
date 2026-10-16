@@ -305,7 +305,8 @@ def t_free_limits(c):
     signup(c, "free@example.com")
     _set_user("free@example.com", trial_ends_at=utcnow() - timedelta(days=1))
     e = c.get("/api/auth/me").json()["user"]["entitlements"]
-    check(e["tier"] == "free" and e["limits"]["analysis"] == 5 and "strategy" not in e["features"], e)
+    check(e["tier"] == "free" and e["limits"]["analysis"] == 5 and "strategy" in e["features"]
+          and e["limits"]["strategy"] == 40, e)
     for i in range(5):
         check(c.post("/api/analysis/run", json=dict(symbol="ETHUSDT", tf="4h"), headers=H).status_code == 200, i)
     r = c.post("/api/analysis/run", json=dict(symbol="ETHUSDT", tf="4h"), headers=H)

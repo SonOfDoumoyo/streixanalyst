@@ -32,6 +32,10 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: TWELVEDATA_ENABLED
+        value: "0"
+      - key: TWELVEDATA_API_KEY
+        sync: false
       - key: PAYSTACK_SECRET_KEY
         sync: false
       - key: MANUAL_ACCOUNTS

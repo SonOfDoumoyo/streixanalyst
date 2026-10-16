@@ -196,12 +196,13 @@ def parse_symbol(symbol):
 
     if clean in _DUKA and prefix not in _PREFIX_CRYPTO:
         attr, disp, cls, sub, yh = _DUKA[clean]
-        cands = [("dukascopy", attr)] + ([("yahoo", yh)] if yh else [])
+        cands = td_candidates(clean, cls, clean, "USD") + [("dukascopy", attr)] + ([("yahoo", yh)] if yh else [])
         return out(disp, cls, sub, clean, _QUOTE.get(clean, "USD"), cands)
     if len(clean) == 6 and clean[:3] in FIAT and clean[3:] in FIAT and prefix not in _PREFIX_CRYPTO:
         a, b = clean[:3], clean[3:]
         sub = "fx_major" if clean in FX_MAJORS else ("fx_cross" if a in G10 and b in G10 else "fx_exotic")
-        cands = [("dukascopy", f"FX_MAJORS_{a}_{b}|FX_CROSSES_{a}_{b}"), ("yahoo", f"{clean}=X")]
+        cands = td_candidates(clean, "fx", a, b) + [("dukascopy", f"FX_MAJORS_{a}_{b}|FX_CROSSES_{a}_{b}"),
+                                                    ("yahoo", f"{clean}=X")]
         return out(f"{a}/{b}", "fx", sub, a, b, cands)
     base = quote = None
     for q in CRYPTO_QUOTES:
@@ -226,7 +227,8 @@ def parse_symbol(symbol):
         sub = "crypto_major" if base in CRYPTO_MAJORS else "crypto_alt"
         return out(f"{base}/{quote}", "crypto", sub, base, quote, cands)
     if re.fullmatch(r"[A-Z]{1,5}", clean):                     # looks like a US stock ticker
-        return out(clean, "stock", "stock", clean, "USD", [("dukascopy", f"US_{clean}_US_USD"), ("yahoo", clean)])
+        return out(clean, "stock", "stock", clean, "USD",
+                   td_candidates(clean, "stock", clean, "USD") + [("dukascopy", f"US_{clean}_US_USD"), ("yahoo", clean)])
     return out(raw.upper(), "other", "other", clean, "USD", [("yahoo", raw.strip())])
 
 
@@ -426,6 +428,61 @@ def _empty():
     return clean(None)
 
 
+# ───────────────────────── Twelve Data (paid plan for most metals and indices) ─────────────────────────
+# Off unless TWELVEDATA_ENABLED=1 and TWELVEDATA_API_KEY is set. While it is off, nothing changes: the free sources answer.
+TD_IV = {"1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "1h", "4h": "4h", "1D": "1day",
+         "1W": "1week", "1M": "1month"}
+# Twelve Data names for metals and indices. Check each one with a test call. A name Twelve Data rejects falls back to
+# the free sources, so the chart keeps working.
+TD_SYMBOL = {"XAUUSD": "XAU/USD", "XAGUSD": "XAG/USD", "XPTUSD": "XPT/USD", "XPDUSD": "XPD/USD",
+             "US30": "DJI", "NAS100": "NDX", "US500": "SPX", "US2000": "RUT", "VIX": "VIX",
+             "UK100": "FTSE", "JP225": "N225", "HK50": "HSI"}
+NATIVE["twelvedata"] = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "4h": "4h", "1D": "1D",
+                        "3D": "1D", "1W": "1W", "1M": "1M"}
+
+
+def twelvedata_on():
+    return os.environ.get("TWELVEDATA_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def td_candidates(clean_name, asset_class, base, quote):
+    """Twelve Data goes first for forex, metals, indices and stocks, and only when it is switched on."""
+    if not twelvedata_on():
+        return []
+    if asset_class == "fx":
+        return [("twelvedata", f"{base}/{quote}")]
+    if asset_class == "stock":
+        return [("twelvedata", clean_name)]
+    if asset_class in ("metal", "index") and clean_name in TD_SYMBOL:
+        return [("twelvedata", TD_SYMBOL[clean_name])]
+    return []
+
+
+def fetch_twelvedata(native, tf, start, end):
+    """Twelve Data time series. Needs TWELVEDATA_API_KEY. Any error falls through to the next source."""
+    key = os.environ.get("TWELVEDATA_API_KEY", "").strip()
+    if not key:
+        raise DataError("Twelve Data is on but TWELVEDATA_API_KEY is empty")
+    s = pd.Timestamp(start).tz_convert("UTC").strftime("%Y-%m-%d %H:%M:%S")
+    e = pd.Timestamp(end).tz_convert("UTC").strftime("%Y-%m-%d %H:%M:%S")
+    js = _get_json("https://api.twelvedata.com/time_series",
+                   dict(symbol=native, interval=TD_IV[tf], start_date=s, end_date=e, outputsize=5000,
+                        timezone="UTC", order="ASC", format="JSON", apikey=key))
+    if not isinstance(js, dict) or js.get("status") == "error" or "values" not in js:
+        msg = js.get("message") if isinstance(js, dict) else js
+        raise SymbolNotFound(f"Twelve Data: {str(msg)[:160]}")
+    values = js.get("values") or []
+    if not values:
+        return _empty()
+    df = pd.DataFrame(values)
+    df.index = pd.to_datetime(df.pop("datetime"), utc=True)
+    df = df.rename(columns=str.lower)
+    for col in ("open", "high", "low", "close", "volume"):
+        if col not in df.columns:
+            df[col] = 0.0
+    return clean(df[["open", "high", "low", "close", "volume"]].astype(float))
+
+
 def fetch_dukascopy(native, tf, start, end):
     import dukascopy_python as dk
     from dukascopy_python import instruments as ins
@@ -537,7 +594,7 @@ def fetch_yahoo(native, tf, start, end):
 
 FETCH = {"dukascopy": fetch_dukascopy, "binance": lambda n, t, s, e: fetch_binance(n, t, s, e, "binance"),
          "binanceus": lambda n, t, s, e: fetch_binance(n, t, s, e, "binanceus"), "kucoin": fetch_kucoin,
-         "coinbase": fetch_coinbase, "yahoo": fetch_yahoo}
+         "coinbase": fetch_coinbase, "yahoo": fetch_yahoo, "twelvedata": fetch_twelvedata}
 
 
 # ───────────────────────────── cache ─────────────────────────────

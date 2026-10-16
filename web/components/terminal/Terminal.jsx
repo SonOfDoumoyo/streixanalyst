@@ -214,7 +214,7 @@ export default function Terminal() {
   // live updates
   useEffect(() => {
     if (!engReady || chartState.error || chartState.loading || !meta) return undefined;
-    const every = meta.asset_class === "crypto" ? 2500 : 5000;
+    const every = 5000;               // every market (crypto, forex, metals, indices, stocks) refreshes every 5 seconds
     let alive = true;
     const tick = async () => {
       if (document.hidden || !alive) return;
@@ -454,6 +454,11 @@ export default function Terminal() {
             ))}
           </div>
         )}
+        <Link className="icon-btn" href={`/strategy?s=${encodeURIComponent(symbol)}&tf=${tf}`} data-tour="strategy"
+          title="Test a strategy on this market" aria-label="Test a strategy on this market"
+          style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+          <Icon name="sliders" size={16} />
+        </Link>
         {!mobile ? (
           <>
             <span className="sep" />
