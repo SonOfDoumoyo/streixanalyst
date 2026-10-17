@@ -21,10 +21,11 @@ import AIChat from "./AIChat";
 import Watchlist from "./Watchlist";
 import NewsPanel from "./NewsPanel";
 import ReviewModal from "./ReviewModal";
+import DivergencePanel from "./DivergencePanel";
 
 const STYLES = [["candles", "Candles"], ["hollow", "Hollow candles"], ["heikin", "Heikin Ashi"], ["bars", "OHLC bars"], ["line", "Line"], ["area", "Area"]];
 const INDICATORS = [["ema20", "EMA 20"], ["ema50", "EMA 50"], ["ema200", "EMA 200"], ["bb", "Bollinger Bands"], ["vwap", "VWAP (intraday)"]];
-const TABS = [["analysis", "Analysis", "zap"], ["ai", "StreixAI", "sparkles"], ["watchlist", "Watchlist", "list"], ["news", "News", "news"]];
+const TABS = [["analysis", "Analysis", "zap"], ["ai", "StreixAI", "sparkles"], ["watchlist", "Watchlist", "list"], ["news", "News", "news"], ["divergence", "Divergence", "candles"]];
 
 function useWidth() {
   const [w, setW] = useState(typeof window === "undefined" ? 1400 : window.innerWidth);
@@ -429,6 +430,7 @@ export default function Terminal() {
           <Watchlist symbols={watch} current={symbol} onPick={pickSymbol} onRemove={(s) => toggleWatch(s, false)} onAdd={() => setSearchOpen(true)} onMove={moveWatch} />
         ) : null}
         {tab === "news" ? <NewsPanel symbol={symbol} tf={tf} /> : null}
+        {tab === "divergence" ? <DivergencePanel symbol={symbol} tf={tf} /> : null}
       </div>
     </>
   );

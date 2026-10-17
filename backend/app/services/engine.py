@@ -15,6 +15,7 @@ if str(GURU_DIR) not in sys.path:
 import market_data as md            # noqa: E402
 import guru_model as gm             # noqa: E402
 import guru_analyst as ga           # noqa: E402
+import divergence as dvg            # noqa: E402
 
 from . import exchanges, news      # noqa: E402  (exchanges patches market_data on import)
 
@@ -164,6 +165,18 @@ def quote(symbol):
     price = float(C["price"])
     return dict(symbol=symbol, display=C["symbol"], price=price, decimals=C["decimals"],
                 change=None if not op else (price / op - 1) * 100, asset_class=C["asset_class"])
+
+
+def divergence(symbol, tf, bars=1500):
+    """Regular divergence on nine oscillators, and how each one's past signals played out (guru/divergence.py).
+    Uses closed candles only, and the same cost model as the Strategy Lab."""
+    tf = _norm_tf(tf)
+    bars = int(min(max(bars, 200), 5000))
+    C = _get(symbol, tf, bars, refresh_s=60 if md.TF_MIN[tf] < 1440 else 300, min_bars=60)
+    cost, slip = gm.cost_of(C["sub"])
+    res = dvg.scan(C["df"], cost_frac=cost, slip_frac=slip)
+    return dict(symbol=C["symbol"], tf=tf, source=C["source"], asset_class=C["asset_class"], bars=int(len(C["df"])),
+                **res)
 
 
 def _attach_news(res, spec, tf):

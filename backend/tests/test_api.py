@@ -211,6 +211,18 @@ def t_candles(c):
     check(anon.get("/api/market/candles?symbol=BTCUSDT").status_code == 401, "auth needed")
 
 
+def t_divergence(c):
+    """The divergence scorecard: nine oscillators, consistent counts, and the past-results disclaimer."""
+    r = c.get("/api/market/divergence?symbol=BTCUSDT&tf=1h&bars=600")
+    check(r.status_code == 200, r.text)
+    d = r.json()
+    check(len(d["indicators"]) == 9 and d["bars"] >= 200, (len(d["indicators"]), d.get("bars")))
+    for row in d["indicators"]:
+        check(row["signals"] == row["wins"] + row["losses"], row)
+        check(row["win_rate"] is None or 0 <= row["win_rate"] <= 100, row)
+    check(any("Past signals" in n for n in d["notes"]), d["notes"])
+
+
 def t_analysis(c):
     before = c.get("/api/auth/me").json()["user"]["entitlements"]["usage"].get("analysis", 0)
     body = dict(symbol="BTCUSDT", tf="1h", account=1000, risk_pct=1,
@@ -819,7 +831,7 @@ def main():
             if engine.BRAIN["status"] != "loading":
                 break
             time.sleep(0.1)
-        tests = [t_health, t_signup_rules, t_signup_and_me, t_login, t_watchlist, t_search, t_candles, t_analysis,
+        tests = [t_health, t_signup_rules, t_signup_and_me, t_login, t_watchlist, t_search, t_candles, t_divergence, t_analysis,
                  t_review, t_ai_offline, t_ai_claude, t_brain_status]
         for t in tests:
             run(t.__name__, t, c)

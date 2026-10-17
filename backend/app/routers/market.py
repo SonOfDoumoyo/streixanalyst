@@ -42,6 +42,13 @@ def latest(symbol: str, tf: str = "1h", user: User = Depends(current_user)):
     return _run(engine.latest, symbol, tf)
 
 
+@router.get("/divergence")
+def divergence(symbol: str, tf: str = "1h", bars: int = Query(1500, ge=200, le=5000),
+               user: User = Depends(current_user)):
+    _limit(f"u{user.id}")
+    return _run(engine.divergence, symbol, tf, bars)
+
+
 @router.get("/quotes")
 def quotes(symbols: str, user: User = Depends(current_user)):
     _limit(f"u{user.id}")
