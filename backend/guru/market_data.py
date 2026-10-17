@@ -728,7 +728,12 @@ def get_candles(symbol, tf="1h", bars=1000, start=None, end=None, refresh_s=None
     tf = norm_tf(tf)
     spec = parse_symbol(symbol)
     now = utcnow()
-    end = pd.Timestamp(end).tz_convert("UTC") if end is not None else now
+    pinned = end is not None                     # a moment in the past (a replay): nothing later may be used
+    if pinned:
+        end = pd.Timestamp(end)
+        end = end.tz_localize("UTC") if end.tzinfo is None else end.tz_convert("UTC")
+    else:
+        end = now
     start = pd.Timestamp(start).tz_convert("UTC") if start is not None else start_for(tf, bars, spec["asset_class"], end)
     refresh_s = refresh_s if refresh_s is not None else max(15, min(300, TF_MIN[tf] * 6))
     cands = list(spec["candidates"])
@@ -768,6 +773,11 @@ def get_candles(symbol, tf="1h", bars=1000, start=None, end=None, refresh_s=None
         raise DataError(f"No data for {symbol} {tf}. Tried → " + " | ".join(errors))
     _WORKING[spec["key"]] = used
     closed, forming = split_forming(df, tf, now)
+    if pinned:
+        # keep only candles that had closed by `end`: a candle still open at `end` holds prices from after it
+        closed, forming = closed[close_times(closed.index, tf) <= end], None
+        if not len(closed):
+            raise DataError(f"No closed candles for {symbol} {tf} before {end:%Y-%m-%d %H:%M} UTC.")
     if bars and len(closed) > bars:
         closed = closed.iloc[-bars:]
     last_close = close_times(closed.index[-1:], tf)[0] if len(closed) else None

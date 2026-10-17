@@ -326,7 +326,8 @@ def learning(admin: User = Depends(admin_user), db: Session = Depends(get_db)):
     """What the verified-learning pipeline has to work with. Only calls whose outcome was measured on real candles
     after the call, and practice analyses the analyst scored highly, are offered for export."""
     from ..models import PracticeAttempt
-    by = dict(db.execute(select(AnalysisLog.outcome, func.count(AnalysisLog.id)).where(AnalysisLog.kind == "analysis")
+    by = dict(db.execute(select(AnalysisLog.outcome, func.count(AnalysisLog.id))
+                         .where(AnalysisLog.kind.in_(("analysis", "replay")))
                          .group_by(AnalysisLog.outcome)).all())
     resolved = sum(by.get(k, 0) for k in ("tp", "sl", "time"))
     prac = db.execute(select(func.count(PracticeAttempt.id))).scalar()
@@ -353,7 +354,7 @@ def learning_export(dataset: str = "calls", min_score: int = LEARN_MIN_SCORE, ad
     if dataset == "calls":
         # only accounts that ticked "learn from my charts" at sign-up (or later) are exported
         consenting = select(User.id).where(User.learn_consent.is_(True))
-        rows = db.execute(select(AnalysisLog).where(AnalysisLog.kind == "analysis", AnalysisLog.dup_of.is_(None),
+        rows = db.execute(select(AnalysisLog).where(AnalysisLog.kind.in_(("analysis", "replay")), AnalysisLog.dup_of.is_(None),
                                                     AnalysisLog.outcome.in_(("tp", "sl", "time")),
                                                     AnalysisLog.user_id.in_(consenting))
                           .order_by(AnalysisLog.id)).scalars().all()

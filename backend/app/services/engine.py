@@ -6,6 +6,8 @@ import time
 import warnings
 from pathlib import Path
 
+import pandas as pd
+
 from ..config import BASE_DIR, settings
 
 GURU_DIR = BASE_DIR / "guru"
@@ -92,9 +94,9 @@ def _norm_tf(tf):
         raise EngineError(str(e))
 
 
-def _get(symbol, tf, bars, refresh_s, min_bars=30):
+def _get(symbol, tf, bars, refresh_s, min_bars=30, end=None):
     try:
-        return md.get_candles(symbol, tf, bars=bars, refresh_s=refresh_s, min_bars=min_bars)
+        return md.get_candles(symbol, tf, bars=bars, refresh_s=refresh_s, min_bars=min_bars, end=end)
     except md.DataError as e:
         msg = str(e)
         if "Tried" in msg:
@@ -125,11 +127,41 @@ def _meta(C):
                 age_minutes=C["age_minutes"])
 
 
-def candles(symbol, tf, bars=600):
+def parse_moment(value):
+    """A replay moment as a UTC time (a time with no zone is taken as UTC). It has to be in the past."""
+    try:
+        t = pd.Timestamp(value)
+    except (TypeError, ValueError):
+        raise EngineError("That date and time isn't valid.")
+    t = t.tz_localize("UTC") if t.tzinfo is None else t.tz_convert("UTC")
+    if t >= md.utcnow():
+        raise EngineError("Pick a moment in the past.")
+    return t
+
+
+def window_end(at, tf, ahead=0):
+    """(cut-off, last moment the chart may show): the cut-off plus `ahead` candles, never later than now."""
+    t = parse_moment(at)
+    return t, min(t + pd.Timedelta(minutes=md.TF_MIN[_norm_tf(tf)] * int(ahead)), md.utcnow())
+
+
+def candles(symbol, tf, bars=600, at=None, ahead=0):
+    """Candles for the chart. With `at` it is a replay: the chart stops at that moment, and shows `ahead` more candles
+    once the person has revealed what happened next."""
     tf = _norm_tf(tf)
     bars = int(min(max(bars, 50), 5000))
-    C = _get(symbol, tf, bars, refresh_s=5 if md.TF_MIN[tf] < 1440 else 30)
-    return dict(_meta(C), candles=candles_payload(C))
+    if at is None:
+        C = _get(symbol, tf, bars, refresh_s=5 if md.TF_MIN[tf] < 1440 else 30)
+        return dict(_meta(C), candles=candles_payload(C))
+    t, end = window_end(at, tf, ahead)
+    C = _get(symbol, tf, bars, refresh_s=3600, end=end)
+    return dict(_meta(C), replay_at=t.isoformat(), candles=candles_payload(C, include_forming=False))
+
+
+def _pin_age(C, asof):
+    """How old the newest candle is at the replay moment (the live clock is not the replay's clock)."""
+    if C.get("last_close_time") is not None:
+        C["age_minutes"] = round((asof - C["last_close_time"]).total_seconds() / 60, 1)
 
 
 def latest(symbol, tf):
@@ -194,16 +226,21 @@ def _attach_news(res, spec, tf):
     return res
 
 
-def analyze(symbol, tf, account=1000.0, risk_pct=1.0, mode="pro", user_drawings=None, leverage=None):
+def analyze(symbol, tf, account=1000.0, risk_pct=1.0, mode="pro", user_drawings=None, leverage=None, at=None):
+    """The analysis. With `at` it is a replay: run as it would have been at that moment, from candles that had closed
+    by then. Today's headlines are left out, because they did not exist then."""
     tf = _norm_tf(tf)
     spec = spec_of(symbol)
+    asof = parse_moment(at) if at is not None else None
     if not _sem.acquire(timeout=60):
         raise EngineError("The analyst is busy right now. Try again in a few seconds.")
     try:
-        C = _get(symbol, tf, ga.BARS[tf], refresh_s=8)
+        C = _get(symbol, tf, ga.BARS[tf], refresh_s=8 if asof is None else 3600, end=asof)
+        if asof is not None:
+            _pin_age(C, asof)
         try:
             res = ga.analyze(symbol, tf, account=float(account), risk_pct=float(risk_pct), mode=mode,
-                             user_drawings=user_drawings or None, brain=brain(), leverage=leverage, data=C)
+                             user_drawings=user_drawings or None, brain=brain(), leverage=leverage, data=C, asof=asof)
         except ValueError as e:
             raise EngineError(str(e))
         res = ga.jsonable(res)
@@ -211,6 +248,11 @@ def analyze(symbol, tf, account=1000.0, risk_pct=1.0, mode="pro", user_drawings=
         _sem.release()
     res["meta"] = _meta(C)
     res["brain_status"] = BRAIN["status"]
+    if asof is not None:
+        res["replay_at"] = asof.isoformat()
+        res["news"] = dict(risk="unknown", note="Headlines are live, so none are shown for a past moment.",
+                           events=[], headlines=[])
+        return res
     return _attach_news(res, spec, tf)
 
 

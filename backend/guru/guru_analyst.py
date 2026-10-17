@@ -151,7 +151,7 @@ def _safe(fn, default, notes, label):
 
 
 # ───────────────────────────── data & context ─────────────────────────────
-def quote_to_usd(C):
+def quote_to_usd(C, end=None):
     q, b = C["quote"], C["base"]
     if q in USD_LIKE:
         return 1.0, None
@@ -163,7 +163,7 @@ def quote_to_usd(C):
         ((f"USD{q}", True), (f"{q}USD", False))
     for sym, inv in order + ((f"{q}USDT", False),):
         try:
-            p = md.get_candles(sym, "1D", bars=10, min_bars=2)["price"]
+            p = md.get_candles(sym, "1D", bars=10, min_bars=2, end=end)["price"]
             return (1.0 / p if inv else p), None
         except Exception:
             continue
@@ -698,12 +698,14 @@ def analyze_user_drawings(items, X, brain):
 
 # ───────────────────────────── main ─────────────────────────────
 def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_drawings=None, brain=None,
-            leverage=None, now=None, show_bars=SHOW_BARS, data=None):
-    """Full analysis of `symbol` on timeframe `tf` (1m 5m 15m 30m 1h 4h 1D 3D 1W 1M)."""
+            leverage=None, now=None, show_bars=SHOW_BARS, data=None, asof=None):
+    """Full analysis of `symbol` on timeframe `tf` (1m 5m 15m 30m 1h 4h 1D 3D 1W 1M).
+    `asof` (a replay): the analysis is run as it would have been at that moment. Every candle it reads, on every
+    timeframe, had closed by then, and the clock is that moment."""
     t_start = time.time()
     brain = brain or _STATE["brain"] or gm.FallbackBrain()
     tf = md.norm_tf(tf)
-    now = now or md.utcnow()
+    now = asof or now or md.utcnow()
     notes = []
     C = data or md.get_candles(symbol, tf, bars=BARS[tf])
     need = 60 if tf in ("3D", "1W", "1M") else 120
@@ -717,7 +719,7 @@ def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_draw
     HT = {}
     for h in ladder:
         try:
-            Ch = md.get_candles(symbol, h, bars=HTF_BARS)
+            Ch = md.get_candles(symbol, h, bars=HTF_BARS, end=asof)
             if len(Ch["df"]) >= 40:
                 dh, Ah = se.analyze(Ch["df"])
                 HT[h] = dict(C=Ch, df=dh, A=Ah)
@@ -725,7 +727,7 @@ def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_draw
             notes.append(f"{h} candles unavailable ({str(e)[:80]})")
     daily = HT["1D"]["C"] if "1D" in HT else None
     if daily is None and md.TF_MIN[tf] < 43830:
-        daily = _safe(lambda: md.get_candles(symbol, "1D", bars=400, min_bars=5), None, notes, "daily candles")
+        daily = _safe(lambda: md.get_candles(symbol, "1D", bars=400, min_bars=5, end=asof), None, notes, "daily candles")
     intraday = md.TF_MIN[tf] < 1440
     frames = {h: v["C"]["df"] for h, v in HT.items()}
     F, ctx = gm.raw_features(dfe, tf, C["asset_class"], htf=frames,
@@ -762,7 +764,7 @@ def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_draw
         atr * math.sqrt(1440 / md.TF_MIN[tf])
     X["rounds"] = gl.round_levels(price, d_atr)
     X["setups"] = _safe(lambda: gm.find_setups(ctx, cost), [], notes, "setup detector")
-    X["q2usd"] = quote_to_usd(C)
+    X["q2usd"] = quote_to_usd(C, asof)
     # ── key levels
     items = []
     add = lambda price_, label, typ, w=1.0, idx=0: items.append(dict(price=float(price_), label=label, type=typ,

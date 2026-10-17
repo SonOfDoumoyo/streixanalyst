@@ -745,6 +745,40 @@ def t_push(c):
         pu._send_one = real_send
 
 
+def t_replay(c):
+    """A replay stops the chart at the chosen moment, analyses it from candles that had closed by then, and scores the
+    call once it is revealed. Headlines are left out, and a moment in the future is refused."""
+    import pandas as pd
+    from app.models import AnalysisLog, utcnow
+    signup(c, "replay@example.com")
+    at_iso = (utcnow() - timedelta(days=3)).replace(minute=0, second=0, microsecond=0).isoformat() + "Z"
+    at_ts = int(pd.Timestamp(at_iso).timestamp())
+    cs = c.get("/api/market/candles", params=dict(symbol="BTCUSDT", tf="1h", bars=200, at=at_iso)).json()
+    check(cs["candles"] and all(row[0] + 3600 <= at_ts for row in cs["candles"]), "no candle that closes after the moment")
+    check(cs["replay_at"].startswith(at_iso[:13]), ("the chart says where it stopped", cs.get("replay_at")))
+    ahead = c.get("/api/market/candles", params=dict(symbol="BTCUSDT", tf="1h", bars=200, at=at_iso, ahead=48)).json()
+    check(max(row[0] for row in ahead["candles"]) > at_ts, "revealed candles come after the moment")
+    future = (utcnow() + timedelta(days=1)).isoformat() + "Z"
+    check(c.post("/api/replay/analyze", json=dict(symbol="BTCUSDT", tf="1h", at=future), headers=H).status_code == 422,
+          "a moment in the future is refused")
+    r = c.post("/api/replay/analyze", json=dict(symbol="BTCUSDT", tf="1h", at=at_iso), headers=H)
+    check(r.status_code == 200, r.text)
+    rep = r.json()
+    check(rep["news"]["risk"] == "unknown" and rep["replay_id"], "a replay leaves out today's headlines")
+    px = cs["candles"][-1][4]
+    check(c.post("/api/replay/reveal", json=dict(replay_id=rep["replay_id"], side="long", entry=px), headers=H).status_code == 422,
+          "a call needs entry, stop and target")
+    r = c.post("/api/replay/reveal", json=dict(replay_id=rep["replay_id"], side="long", entry=px, sl=px * 0.9, tp=px * 1.2),
+               headers=H)
+    check(r.status_code == 200, r.text)
+    out = r.json()
+    check(out["final"] in (True, False) and out["user"] and out["user"]["status"], out)
+    db = _db()
+    n = db.query(AnalysisLog).filter(AnalysisLog.kind == "replay").count()
+    db.close()
+    check(n >= 1, "the replay is kept for the learning export, dated to its moment")
+
+
 def t_terms_and_site(c):
     """Sign-up needs the Terms ticked; the public site endpoint gives the contact details and the Terms version."""
     from app.security import signup_limiter
@@ -895,7 +929,7 @@ def main():
         run("t_password_change", t_password_change, None)
         run("t_brain_version", t_brain_version, None)
         run("t_direction_view", t_direction_view, None)
-        for t in (t_terms_and_site, t_stage2, t_practice, t_strategy, t_tracker_rules, t_track_record, t_alerts, t_push,
+        for t in (t_terms_and_site, t_stage2, t_practice, t_strategy, t_tracker_rules, t_track_record, t_alerts, t_push, t_replay,
                   t_learning_export):
             run(t.__name__, t, client())
     bad = [r for r in RESULTS if not r[1]]

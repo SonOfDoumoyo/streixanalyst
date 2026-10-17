@@ -22,10 +22,12 @@ import Watchlist from "./Watchlist";
 import NewsPanel from "./NewsPanel";
 import ReviewModal from "./ReviewModal";
 import DivergencePanel from "./DivergencePanel";
+import ReplayPanel from "./ReplayPanel";
 
 const STYLES = [["candles", "Candles"], ["hollow", "Hollow candles"], ["heikin", "Heikin Ashi"], ["bars", "OHLC bars"], ["line", "Line"], ["area", "Area"]];
 const INDICATORS = [["ema20", "EMA 20"], ["ema50", "EMA 50"], ["ema200", "EMA 200"], ["bb", "Bollinger Bands"], ["vwap", "VWAP (intraday)"]];
-const TABS = [["analysis", "Analysis", "zap"], ["ai", "StreixAI", "sparkles"], ["watchlist", "Watchlist", "list"], ["news", "News", "news"], ["divergence", "Divergence", "candles"]];
+const TABS = [["analysis", "Analysis", "zap"], ["replay", "Replay", "clock"], ["ai", "StreixAI", "sparkles"], ["watchlist", "Watchlist", "list"], ["news", "News", "news"], ["divergence", "Divergence", "candles"]];
+const utcLabel = (iso) => `${iso.replace("T", " ").slice(0, 16)} UTC`;
 
 function useWidth() {
   const [w, setW] = useState(typeof window === "undefined" ? 1400 : window.innerWidth);
@@ -58,6 +60,9 @@ export default function Terminal() {
   const [detail, setDetailState] = useState(settings.analysis.detail || 1);
   const [showAlt, setShowAlt] = useState(settings.analysis.showAlt === true);
   const [tab, setTab] = useState("analysis");
+  // a replay moment: { at (ISO, UTC), ahead (candles shown after it, once revealed) }, or null when live
+  const [replay, setReplay] = useState(null);
+  const replayKey = replay ? `${replay.at}|${replay.ahead}` : "live";
   const [panelOpen, setPanelOpen] = useState(false);
   const [panelHidden, setPanelHidden] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -81,6 +86,8 @@ export default function Terminal() {
   const saveTimer = useRef(null);
   const resRef = useRef(null);
   resRef.current = res;
+  const replayRef = useRef(null);
+  replayRef.current = replay;
 
   const theme = useMemo(() => ({
     bg: settings.chart.background, grid: settings.chart.gridColor, text: settings.chart.textColor, crosshair: settings.chart.crosshair,
@@ -152,7 +159,7 @@ export default function Terminal() {
   }, [engReady, drawVisible]);
 
   // ───── data loading
-  const loadChart = useCallback(async (sym, frame) => {
+  const loadChart = useCallback(async (sym, frame, rp) => {
     const e = eng.current;
     if (!e) return;
     setChartState({ loading: true, error: null });
@@ -162,7 +169,7 @@ export default function Terminal() {
     e.clearAnalysis();
     barsRef.current = 600;
     try {
-      const d = await get(`/market/candles?${qs({ symbol: sym, tf: frame, bars: 600 })}`);
+      const d = await get(`/market/candles?${qs(rp ? { symbol: sym, tf: frame, bars: 600, at: rp.at, ahead: rp.ahead } : { symbol: sym, tf: frame, bars: 600 })}`);
       if (sym !== symbolRef.current || frame !== tfRef.current) return;
       e.setData(d.candles, { tfSec: d.tf_seconds, decimals: d.decimals, label: `${d.display} · ${frame}` });
       setMeta(d);
@@ -189,8 +196,9 @@ export default function Terminal() {
     const want = Math.min(5000, barsRef.current * 2);
     const sym = symbolRef.current;
     const frame = tfRef.current;
+    const rp = replayRef.current;
     try {
-      const d = await get(`/market/candles?${qs({ symbol: sym, tf: frame, bars: want })}`);
+      const d = await get(`/market/candles?${qs(rp ? { symbol: sym, tf: frame, bars: want, at: rp.at, ahead: rp.ahead } : { symbol: sym, tf: frame, bars: want })}`);
       if (sym === symbolRef.current && frame === tfRef.current && d.candles.length > e.d.length) {
         e.setData(d.candles, { tfSec: d.tf_seconds, decimals: d.decimals, keepView: true });
         barsRef.current = want;
@@ -204,17 +212,17 @@ export default function Terminal() {
 
   useEffect(() => {
     if (!engReady) return;
-    loadChart(symbol, tf);
+    loadChart(symbol, tf, replayRef.current);
     const url = new URL(window.location.href);
     url.searchParams.set("s", symbol);
     url.searchParams.set("tf", tf);
     window.history.replaceState(null, "", url.toString());
     if (settings.lastSymbol !== symbol || settings.lastTf !== tf) updateSettings({ lastSymbol: symbol, lastTf: tf });
-  }, [engReady, symbol, tf]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [engReady, symbol, tf, replayKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // live updates
   useEffect(() => {
-    if (!engReady || chartState.error || chartState.loading || !meta) return undefined;
+    if (!engReady || chartState.error || chartState.loading || !meta || replayKey !== "live") return undefined;
     const every = 5000;               // every market (crypto, forex, metals, indices, stocks) refreshes every 5 seconds
     let alive = true;
     const tick = async () => {
@@ -237,7 +245,7 @@ export default function Terminal() {
       alive = false;
       clearInterval(t);
     };
-  }, [engReady, symbol, tf, meta && meta.asset_class, chartState.loading, chartState.error]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [engReady, symbol, tf, meta && meta.asset_class, chartState.loading, chartState.error, replayKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     get("/user/watchlist").then((d) => setWatch(d.symbols || [])).catch(() => {});
@@ -254,6 +262,10 @@ export default function Terminal() {
   const showLimit = useCallback((e) => setPaywall({ message: e.message, detail: e.detail }), []);
 
   const analyse = useCallback(async () => {
+    if (replayRef.current) {
+      toast("You're looking at a past moment. Analyse it from the Replay tab.", "info");
+      return;
+    }
     if (busy || !eng.current || chartState.error) return;
     setBusy(true);
     setTab("analysis");
@@ -431,6 +443,7 @@ export default function Terminal() {
         ) : null}
         {tab === "news" ? <NewsPanel symbol={symbol} tf={tf} /> : null}
         {tab === "divergence" ? <DivergencePanel symbol={symbol} tf={tf} /> : null}
+        {tab === "replay" ? <ReplayPanel symbol={symbol} tf={tf} replay={replay} setReplay={setReplay} /> : null}
       </div>
     </>
   );
@@ -626,7 +639,7 @@ export default function Terminal() {
                 <b>{symbol} isn't loading</b>
                 <p className="muted" style={{ fontSize: "0.9rem" }}>{chartState.error}</p>
                 <div className="row" style={{ justifyContent: "center", gap: 8 }}>
-                  <button className="btn sm" onClick={() => loadChart(symbol, tf)}>Try again</button>
+                  <button className="btn sm" onClick={() => loadChart(symbol, tf, replayRef.current)}>Try again</button>
                   <button className="btn sm primary" onClick={() => setSearchOpen(true)}>Search markets</button>
                 </div>
               </div>
@@ -650,7 +663,16 @@ export default function Terminal() {
             </button>
           ) : null}
           {meta && !chartState.loading ? (
-            <div className="chart-status hide-mobile"><span className="live-dot" /> Live · {meta.source}</div>
+            <div className="chart-status hide-mobile">
+              {replay ? (
+                <>
+                  <span className="live-dot" style={{ background: "var(--warn)" }} /> Replay · {utcLabel(replay.at)}{replay.ahead ? " · future shown" : " · future hidden"}
+                  <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => setReplay(null)}>Back to live</button>
+                </>
+              ) : (
+                <><span className="live-dot" /> Live · {meta.source}</>
+              )}
+            </div>
           ) : null}
         </div>
         <aside className={`rpanel ${panelVisible ? "open" : ""}`} aria-label="Analysis and tools" style={!narrow && panelHidden ? { display: "none" } : undefined}>
