@@ -1,16 +1,13 @@
 # Render blueprint: API in Frankfurt (Binance/Bybit refuse US servers) + PostgreSQL.
+# Free plans for testing: no persistent disk, so the model file resets when the service sleeps or redeploys.
 services:
   - type: web
     name: streixanalyst-api
     runtime: docker
     rootDir: backend
     region: frankfurt
-    plan: starter
+    plan: free
     healthCheckPath: /api/health
-    disk:
-      name: data
-      mountPath: /var/data
-      sizeGB: 5
     envVars:
       - key: ENV
         value: production
@@ -49,4 +46,4 @@ services:
 databases:
   - name: streixanalyst-db
     region: frankfurt
-    plan: basic-256mb
+    plan: free
