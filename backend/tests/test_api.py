@@ -694,6 +694,57 @@ def t_alerts(c):
     check(c.patch(f"/api/alerts/{cross}", json=dict(status="active"), headers=H).status_code == 200, "room again")
 
 
+def t_push(c):
+    """Phone alerts are off until the VAPID keys are set. Then a device subscribes, an alert reaches every device, a
+    device the push service reports as gone is dropped, and unsubscribing turns a device off. The push is faked here."""
+    from app.config import settings
+    from app.models import User
+    from app.services import alerts as al
+    from app.services import push as pu
+    signup(c, "phone@example.com")
+    ok_ep = "https://push.example/device-ok-" + "x" * 12
+    gone_ep = "https://push.example/device-gone-" + "x" * 12
+    keys_body = dict(p256dh="p" * 20, auth="a" * 10)
+    check(c.get("/api/push").json()["available"] is False, "phone alerts are off until the VAPID keys are set")
+    check(c.post("/api/push/subscribe", json=dict(endpoint=ok_ep, keys=keys_body), headers=H).status_code == 503,
+          "subscribing is refused while phone alerts are off")
+    saved = (settings.vapid_public_key, settings.vapid_private_key, settings.vapid_subject)
+    real_send, sent = pu._send_one, []
+
+    def fake_send(sub, payload):
+        sent.append((sub.endpoint, payload))
+        return ("gone", None) if "gone" in sub.endpoint else ("sent", None)
+
+    try:
+        settings.vapid_public_key, settings.vapid_private_key = "BPUBTEST", "PRIVTEST"
+        settings.vapid_subject = "mailto:test@example.com"
+        pu._send_one = fake_send
+        check(c.get("/api/push").json()["available"] is True, "on once the keys are set")
+        check(c.post("/api/push/subscribe", json=dict(endpoint="http://push.example/" + "x" * 20, keys=keys_body),
+                     headers=H).status_code == 422, "push addresses must be https")
+        check(c.post("/api/push/subscribe", json=dict(endpoint=ok_ep, keys=keys_body), headers=H).json()["devices"] == 1,
+              "first device")
+        check(c.post("/api/push/subscribe", json=dict(endpoint=gone_ep, keys=keys_body), headers=H).json()["devices"] == 2,
+              "second device")
+        check(c.post("/api/push/subscribe", json=dict(endpoint=ok_ep, keys=dict(p256dh="q" * 20, auth="b" * 10)),
+                     headers=H).json()["devices"] == 2, "the same device again is not a new one")
+        db = _db()
+        u = db.query(User).filter(User.email == "phone@example.com").one()
+        al.notify(db, u, "BTCUSDT rose to 100", "Your level was hit.", "/terminal?s=BTCUSDT&tf=1h")
+        db.commit()
+        db.close()
+        check(sorted(e for e, _ in sent) == sorted([ok_ep, gone_ep]), ("both devices were tried", sent))
+        check(sent[0][1]["title"] == "BTCUSDT rose to 100" and sent[0][1]["url"] == "/terminal?s=BTCUSDT&tf=1h", sent[0])
+        check(c.get("/api/push").json()["devices"] == 1, "the device the push service dropped was removed")
+        test_result = c.post("/api/push/test", headers=H).json()
+        check(test_result["sent"] == 1 and test_result["removed"] == 0, ("the test reaches the one device left", test_result))
+        check(c.post("/api/push/unsubscribe", json=dict(endpoint=ok_ep), headers=H).status_code == 200, "unsubscribe")
+        check(c.get("/api/push").json()["devices"] == 0, "no devices left")
+    finally:
+        settings.vapid_public_key, settings.vapid_private_key, settings.vapid_subject = saved
+        pu._send_one = real_send
+
+
 def t_terms_and_site(c):
     """Sign-up needs the Terms ticked; the public site endpoint gives the contact details and the Terms version."""
     from app.security import signup_limiter
@@ -844,7 +895,7 @@ def main():
         run("t_password_change", t_password_change, None)
         run("t_brain_version", t_brain_version, None)
         run("t_direction_view", t_direction_view, None)
-        for t in (t_terms_and_site, t_stage2, t_practice, t_strategy, t_tracker_rules, t_track_record, t_alerts,
+        for t in (t_terms_and_site, t_stage2, t_practice, t_strategy, t_tracker_rules, t_track_record, t_alerts, t_push,
                   t_learning_export):
             run(t.__name__, t, client())
     bad = [r for r in RESULTS if not r[1]]

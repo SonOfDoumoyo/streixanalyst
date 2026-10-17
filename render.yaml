@@ -36,6 +36,12 @@ services:
         value: "0"
       - key: TWELVEDATA_API_KEY
         sync: false
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false
       - key: PAYSTACK_SECRET_KEY
         sync: false
       - key: MANUAL_ACCOUNTS

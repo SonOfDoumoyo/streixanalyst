@@ -15,7 +15,7 @@ import market_data as md
 from ..config import settings
 from ..db import SessionLocal
 from ..models import Alert, Notification, SavedStrategy, User, jload, utcnow
-from . import engine, mailer
+from . import engine, mailer, push
 from . import strategy as stg
 
 log = logging.getLogger("streix.alerts")
@@ -50,6 +50,11 @@ def notify(db, user, title, body, link, kind="alert", email=False):
     db.add(Notification(user_id=user.id, kind=kind, title=title[:160], body=body, link=link))
     if email and user.email:
         mailer.send(user.email, f"StreixAnalyst · {title}", f"{body}\n\nOpen: {settings.frontend_url}{link}")
+    if settings.push_enabled:                    # phone alerts go to the devices that switched them on
+        try:
+            push.send_to_user(db, user.id, title, body, link)
+        except Exception:
+            log.exception("phone alert could not be sent")
 
 
 def _fire(db, a, user, title, body, link, now):

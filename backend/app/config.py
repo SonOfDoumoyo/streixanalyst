@@ -121,6 +121,12 @@ class Settings:
         self.cryptopanic_token = env("CRYPTOPANIC_TOKEN")
         self.enable_background = env_bool("ENABLE_BACKGROUND", True)
 
+        # Phone alerts (Web push). Create the keys once (see .env.example), then set all three. Off until then.
+        self.vapid_public_key = env("VAPID_PUBLIC_KEY")
+        # the private key is PEM text. In a one-line .env value, write its line breaks as \n.
+        self.vapid_private_key = (env("VAPID_PRIVATE_KEY") or "").replace("\\n", "\n") or None
+        self.vapid_subject = env("VAPID_SUBJECT") or (f"mailto:{self.admin_email}" if self.admin_email else None)
+
         # Terms version people tick at sign-up. Change it when the Terms change, so the new version is recorded.
         self.terms_version = env("TERMS_VERSION", "2026-10-15")
         # Prices are in US dollars. Card and bank payments are taken in naira at this rate (₦ per $1).
@@ -145,6 +151,10 @@ class Settings:
     @property
     def opay_enabled(self):
         return bool(self.opay_merchant_id and self.opay_public_key and self.opay_secret_key)
+
+    @property
+    def push_enabled(self):
+        return bool(self.vapid_public_key and self.vapid_private_key and self.vapid_subject)
 
 
 settings = Settings()

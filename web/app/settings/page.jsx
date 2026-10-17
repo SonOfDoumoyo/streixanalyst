@@ -9,10 +9,11 @@ import { useAuth } from "@/components/Providers";
 import { Field, RequireAuth } from "@/components/ui";
 import { AnalysisOptions } from "@/components/terminal/AnalysisPanel";
 import { DIRECTION_VIEWS } from "@/components/DirectionBar";
-import { patch, post } from "@/lib/api";
+import { get, patch, post } from "@/lib/api";
+import { currentPushState, disablePush, enablePush, pushSupported } from "@/lib/push";
 import { CANDLE_PRESETS, CHART_BACKGROUNDS, DEFAULT_SETTINGS } from "@/lib/settings";
 
-const SECTIONS = [["profile", "Profile", "user"], ["chart", "Chart & candles", "palette"], ["analysis", "Analysis", "zap"], ["security", "Password", "lock"], ["help", "Learning & tour", "shield"]];
+const SECTIONS = [["profile", "Profile", "user"], ["chart", "Chart & candles", "palette"], ["analysis", "Analysis", "zap"], ["alerts", "Phone alerts", "bell"], ["security", "Password", "lock"], ["help", "Learning & tour", "shield"]];
 
 function ColorRow({ label, value, onChange }) {
   return (
@@ -47,6 +48,63 @@ function Preview({ s }) {
         );
       })}
     </svg>
+  );
+}
+
+function PhoneAlerts({ toast }) {
+  const [st, setSt] = useState("checking"); // checking | on | off | unsupported | unavailable
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!pushSupported()) { setSt("unsupported"); return; }
+    get("/push")
+      .then(async (info) => setSt(info.available ? await currentPushState() : "unavailable"))
+      .catch(() => setSt("unavailable"));
+  }, []);
+  const turnOn = async () => {
+    setBusy(true);
+    try { await enablePush(); setSt("on"); toast("Phone alerts are on for this device.", "success"); }
+    catch (ex) { toast(ex.message, "error"); }
+    setBusy(false);
+  };
+  const turnOff = async () => {
+    setBusy(true);
+    try { await disablePush(); setSt("off"); toast("Phone alerts are off for this device.", "success"); }
+    catch (ex) { toast(ex.message, "error"); }
+    setBusy(false);
+  };
+  const sendTest = async () => {
+    setBusy(true);
+    try {
+      const d = await post("/push/test");
+      if (d.sent) toast(`Test sent to ${d.sent} device${d.sent === 1 ? "" : "s"}.`, "success");
+      else toast(d.error || "No device is set up for phone alerts yet. Turn them on first.", "error");
+    } catch (ex) { toast(ex.message, "error"); }
+    setBusy(false);
+  };
+  const text = {
+    checking: "Checking this device…",
+    unsupported: "This browser can't show phone alerts. On an iPhone, add StreixAnalyst to your Home Screen (iOS 16.4 or newer) and open it from there.",
+    unavailable: "Phone alerts aren't switched on for this server yet.",
+    off: "Get your price and strategy alerts on this device, even when the site is closed.",
+    on: "Phone alerts are on for this device.",
+  }[st];
+  return (
+    <div className="card stack">
+      <b>Phone alerts</b>
+      <div className="hint" style={{ lineHeight: 1.5 }}>{text}</div>
+      <div className="hint">Your alerts stay the same. This only decides which devices receive them, so turn it on for each device you use.</div>
+      {st === "off" ? (
+        <div className="row" style={{ justifyContent: "flex-end" }}>
+          <button className="btn primary" disabled={busy} onClick={turnOn}>Turn on for this device</button>
+        </div>
+      ) : null}
+      {st === "on" ? (
+        <div className="row wrap" style={{ justifyContent: "flex-end", gap: 8 }}>
+          <button className="btn" disabled={busy} onClick={sendTest}>Send a test</button>
+          <button className="btn ghost" disabled={busy} onClick={turnOff}>Turn off for this device</button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -211,6 +269,7 @@ function SettingsInner() {
                 <div className="hint">Saved automatically.</div>
               </div>
             ) : null}
+            {sec === "alerts" ? <PhoneAlerts toast={toast} /> : null}
             {sec === "help" ? (
               <div className="card stack">
                 <b>Learning</b>
