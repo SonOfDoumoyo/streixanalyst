@@ -48,22 +48,51 @@ export function bgSuitsMode(bg, mode) {
   return mode === "light" ? b >= 0.5 : b < 0.5;
 }
 
-// The full chart theme for the current app mode: palette + the user's candle colours (+ their background when it fits).
+// Mix two hex colours (t = 0 keeps a, t = 1 gives b).
+function mixHex(a, b, t) {
+  const parts = (h) => {
+    let x = String(h).replace("#", "");
+    if (x.length === 3) x = x.split("").map((c) => c + c).join("");
+    const n = parseInt(x, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  };
+  const A = parts(a);
+  const B = parts(b);
+  return "#" + A.map((v, i) => Math.round(v + (B[i] - v) * t).toString(16).padStart(2, "0")).join("");
+}
+
+// A candle colour that is nearly the background (a near-white candle on a white chart, say) would vanish. Pull it
+// toward the text colour until it reads. Colours that already contrast are left exactly as chosen.
+export function fitCandle(color, bg, text) {
+  if (!color) return color;
+  const cb = brightness(color);
+  const bb = brightness(bg);
+  if (cb === null || bb === null) return color;
+  return Math.abs(cb - bb) < 0.3 ? mixHex(color, text, 0.55) : color;
+}
+
+// The full chart theme for the current app mode. Each mode keeps its own background, grid and text in
+// chart.skins[mode] (saved from Settings). Without one, the single chart.background is used if it suits the mode.
 export function chartThemeFor(mode, chart = {}, candles = {}) {
-  const isLight = mode === "light";
-  const pal = isLight ? CHART_PALETTES.light : CHART_PALETTES.dark;
-  const keepUser = bgSuitsMode(chart.background, isLight ? "light" : "dark");
+  const key = mode === "light" ? "light" : "dark";
+  const pal = CHART_PALETTES[key];
+  const skin = (chart.skins && chart.skins[key]) || {};
+  let own = null;
+  if (skin.bg && bgSuitsMode(skin.bg, key)) own = skin;
+  else if (!skin.bg && bgSuitsMode(chart.background, key)) own = { bg: chart.background, grid: chart.gridColor, text: chart.textColor };
+  const bg = own ? own.bg : pal.bg;
+  const text = (own && own.text) || pal.text;
+  const cw = (c) => fitCandle(c, bg, text);
   return {
     ...pal,
-    bg: keepUser ? chart.background : pal.bg,
-    grid: keepUser && chart.gridColor ? chart.gridColor : pal.grid,
-    text: keepUser && chart.textColor ? chart.textColor : pal.text,
-    crosshair: keepUser && chart.crosshair ? chart.crosshair : pal.crosshair,
-    up: candles.up,
-    down: candles.down,
-    wickUp: candles.wickUp,
-    wickDown: candles.wickDown,
-    borderUp: candles.borderUp,
-    borderDown: candles.borderDown,
+    bg,
+    grid: (own && own.grid) || pal.grid,
+    text,
+    up: cw(candles.up),
+    down: cw(candles.down),
+    wickUp: cw(candles.wickUp),
+    wickDown: cw(candles.wickDown),
+    borderUp: cw(candles.borderUp),
+    borderDown: cw(candles.borderDown),
   };
 }

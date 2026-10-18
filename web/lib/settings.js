@@ -12,6 +12,7 @@ export const DEFAULT_SETTINGS = {
     borderDown: "#f23645",
   },
   chart: {
+    skins: {},                 // per app mode: { dark: { bg, grid, text }, light: { ... } }, set from Settings
     background: "#131722",
     grid: false,
     gridColor: "rgba(42,46,57,0.85)",

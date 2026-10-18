@@ -14,7 +14,7 @@ function Prob({ p, be, label }) {
     <div style={{ marginTop: 8 }}>
       <div className="row" style={{ justifyContent: "space-between", fontSize: "0.8rem", marginBottom: 4 }}>
         <span className="muted">{label}</span>
-        <span className="num" style={{ fontWeight: 800, color: good === null ? "var(--text)" : good ? "#4fd1c1" : "#ff8a87" }}>
+        <span className="num" style={{ fontWeight: 800, color: good === null ? "var(--text)" : good ? "var(--good)" : "var(--bad)" }}>
           {fmtPct(p)}{be !== undefined && be !== null ? <span className="faint" style={{ fontWeight: 600 }}> vs {fmtPct(be)} needed</span> : null}
         </span>
       </div>
@@ -105,9 +105,19 @@ function Sizing({ s, dec, isCrypto }) {
   );
 }
 
+// Signed % move from the entry to a price, e.g. "+1.24%" or "−0.42%".
+function movePct(entry, price) {
+  if (!entry || !Number.isFinite(Number(price))) return "";
+  const v = (Number(price) / Number(entry) - 1) * 100;
+  return `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(2)}%`;
+}
+
 function PlanCard({ p, dec, title, isCrypto, dim, onAlert }) {
   if (!p) return null;
   const j = Math.min(1, (p.tps || []).length - 1);
+  const risk = Math.abs(p.entry - p.sl);
+  const reward = p.tps && p.tps[0] ? Math.abs(p.tps[0] - p.entry) : 0;
+  const rrBar = risk > 0 && reward > 0;
   return (
     <div className="card" style={{ padding: 14, opacity: dim ? 0.92 : 1 }}>
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
@@ -117,20 +127,33 @@ function PlanCard({ p, dec, title, isCrypto, dim, onAlert }) {
         </div>
         <span className={`grade ${gradeClass(p.grade)}`} style={{ width: 34, height: 34, fontSize: "0.95rem" }}>{p.grade}</span>
       </div>
-      <div className="plan-grid">
-        <div className="plan-cell ep"><div className="k">Entry</div><div className="v num">{fmtPrice(p.entry, dec)}</div></div>
-        <div className="plan-cell sl"><div className="k">Stop</div><div className="v num">{fmtPrice(p.sl, dec)}</div></div>
-        <div className="plan-cell tp"><div className="k">Target{p.tps && p.tps.length > 1 ? " 1" : ""}</div><div className="v num">{fmtPrice(p.tps && p.tps[0], dec)}</div></div>
-      </div>
-      {p.tps && p.tps.length > 1 ? (
-        <div className="row wrap" style={{ gap: 6, marginTop: 8 }}>
-          {p.tps.slice(1).map((t, i) => (
-            <span key={i} className="badge up num">TP{i + 2} {fmtPrice(t, dec)} · {Number(p.rr[i + 1]).toFixed(1)}R</span>
-          ))}
+      <div className="ladder">
+        <div className="ladder-row ep">
+          <i /><span className="k">Entry</span><span className="v num">{fmtPrice(p.entry, dec)}</span><span className="d" /><span className="rr" />
         </div>
+        <div className="ladder-row sl">
+          <i /><span className="k">Stop</span><span className="v num">{fmtPrice(p.sl, dec)}</span>
+          <span className="d num">{movePct(p.entry, p.sl)}</span><span className="rr" />
+        </div>
+        {(p.tps && p.tps.length ? p.tps : [null]).map((t, i) => (
+          <div key={i} className="ladder-row tp">
+            <i /><span className="k">{p.tps && p.tps.length > 1 ? `Target ${i + 1}` : "Target"}</span>
+            <span className="v num">{fmtPrice(t, dec)}</span>
+            <span className="d num">{movePct(p.entry, t)}</span>
+            <span className="rr num">{p.rr && p.rr[i] !== undefined ? `${Number(p.rr[i]).toFixed(1)}R` : ""}</span>
+          </div>
+        ))}
+      </div>
+      {rrBar ? (
+        <>
+          <div className="rr-bar" title="Risk versus reward, from entry">
+            <i className="risk" style={{ flex: risk }} />
+            <i className="reward" style={{ flex: reward }} />
+          </div>
+          <div className="rr-labels num"><span>Risk 1R</span><span>Reward {Number(p.rr && p.rr[0] || 0).toFixed(2)}R</span></div>
+        </>
       ) : null}
       <div className="row wrap" style={{ gap: 6, marginTop: 8, fontSize: "0.8rem" }}>
-        <span className="badge num">R:R {Number(p.rr[0]).toFixed(2)}</span>
         {p.chase_limit ? <span className="badge num">Don't chase past {fmtPrice(p.chase_limit, dec)}</span> : null}
         {p.expiry ? <span className="badge">Valid {p.expiry} candles</span> : null}
         {onAlert ? (
@@ -261,7 +284,7 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
   };
   const model = res.model || {};
   return (
-    <div className="stack" style={{ gap: 12 }}>
+    <div className="stack ap" style={{ gap: 12 }}>
       {stale ? (
         <button className="badge brand" onClick={onAnalyse} style={{ height: 30, cursor: "pointer", justifyContent: "center" }}>
           <Icon name="refresh" size={14} /> New candle closed — re-analyse
@@ -273,7 +296,7 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
             <div className="faint" style={{ fontSize: "0.76rem", fontWeight: 700, letterSpacing: "0.08em" }}>
               {res.symbol} · {res.tf} · {fmtPrice(res.price, dec)}
             </div>
-            <div className="act" style={{ color: tone === "buy" ? "#4fe0c9" : tone === "sell" ? "#ff8a87" : "#ffc766" }}>{v.action}</div>
+            <div className="act" style={{ color: tone === "buy" ? "var(--act-buy)" : tone === "sell" ? "var(--act-sell)" : "var(--act-wait)" }}>{v.action}</div>
           </div>
           <span className={`grade ${gradeClass(v.grade)}`}>{v.grade}</span>
         </div>
@@ -348,7 +371,7 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
               <tbody>
                 {[...res.levels].sort((a, b) => b.price - a.price).filter((c) => Math.abs(c.dist_atr) <= 8).slice(0, 14).map((c, i) => (
                   <tr key={i}>
-                    <td className="num" style={{ fontWeight: 700, color: c.side === "above" ? "#ff8a87" : "#4fd1c1", whiteSpace: "nowrap" }}>{fmtPrice(c.price, dec)}</td>
+                    <td className="num" style={{ fontWeight: 700, color: c.side === "above" ? "var(--bad)" : "var(--good)", whiteSpace: "nowrap" }}>{fmtPrice(c.price, dec)}</td>
                     <td>{c.labels.slice(0, 3).join(" + ")}</td>
                     <td className="r num faint">{c.p_touch !== undefined && c.p_touch !== null ? fmtPct(c.p_touch) : ""}</td>
                   </tr>

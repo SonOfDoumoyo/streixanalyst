@@ -12,7 +12,7 @@ import { DIRECTION_VIEWS } from "@/components/DirectionBar";
 import { get, patch, post } from "@/lib/api";
 import { currentPushState, disablePush, enablePush, pushSupported } from "@/lib/push";
 import { CANDLE_PRESETS, CHART_BACKGROUNDS, DEFAULT_SETTINGS } from "@/lib/settings";
-import { chartThemeFor } from "@/lib/chartTheme";
+import { bgSuitsMode, chartThemeFor } from "@/lib/chartTheme";
 
 const SECTIONS = [["profile", "Profile", "user"], ["chart", "Chart & candles", "palette"], ["analysis", "Analysis", "zap"], ["alerts", "Phone alerts", "bell"], ["security", "Password", "lock"], ["help", "Learning & tour", "shield"]];
 
@@ -112,6 +112,8 @@ function PhoneAlerts({ toast }) {
 
 function SettingsInner() {
   const { user, setUser, settings, updateSettings, toast } = useAuth();
+  const modeKey = settings.theme === "light" ? "light" : "dark";
+  const skinBg = (settings.chart.skins && settings.chart.skins[modeKey] && settings.chart.skins[modeKey].bg) || null;
   const router = useRouter();
   const [sec, setSec] = useState("profile");
   const [p, setP] = useState({ first_name: user.first_name, last_name: user.last_name, experience: user.experience, phone: user.phone || "" });
@@ -222,16 +224,21 @@ function SettingsInner() {
                 </Field>
                 <div className="divider" />
                 <b>Chart</b>
-                <div className="label">Background · follows {settings.theme === "light" ? "light" : "dark"} mode</div>
+                <div className="label">Background · {modeKey === "light" ? "light" : "dark"} mode</div>
                 <div className="row wrap" style={{ gap: 8 }}>
-                  {CHART_BACKGROUNDS.filter((b) => b.mode === (settings.theme === "light" ? "light" : "dark")).map((b) => (
-                    <button key={b.name} className="chip" onClick={() => updateSettings({ chart: { background: b.bg, gridColor: b.grid, textColor: b.text } })}
-                      style={settings.chart.background === b.bg ? { borderColor: "var(--brand)" } : undefined}>
+                  {CHART_BACKGROUNDS.filter((b) => b.mode === modeKey).map((b) => (
+                    <button key={b.name} className="chip" onClick={() => updateSettings({ chart: { skins: { [modeKey]: { bg: b.bg, grid: b.grid, text: b.text } } } })}
+                      style={skinBg === b.bg ? { borderColor: "var(--brand)" } : undefined}>
                       <span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: b.bg, border: "1px solid var(--line-2)", marginRight: 6, verticalAlign: "-2px" }} />{b.name}
                     </button>
                   ))}
                 </div>
-                <ColorRow label="Custom background" value={settings.chart.background} onChange={(v) => updateSettings({ chart: { background: v } })} />
+                <ColorRow label="Custom background" value={skinBg || chartThemeFor(modeKey, settings.chart, settings.candles).bg}
+                  onChange={(v) => {
+                    if (!bgSuitsMode(v, modeKey)) { toast(modeKey === "light" ? "Pick a light colour for light mode." : "Pick a dark colour for dark mode.", "error"); return; }
+                    updateSettings({ chart: { skins: { [modeKey]: { bg: v } } } });
+                  }} />
+                <div className="hint" style={{ marginTop: -4 }}>Saved for {modeKey === "light" ? "light" : "dark"} mode only. Each mode keeps its own background.</div>
                 {[["volume", "Show volume"], ["grid", "Show grid"], ["rsi", "RSI pane"], ["logScale", "Logarithmic price scale"], ["watermark", "Symbol watermark"]].map(([k, l]) => (
                   <label key={k} className="check"><input type="checkbox" checked={!!settings.chart[k]} onChange={(e) => updateSettings({ chart: { [k]: e.target.checked } })} /> {l}</label>
                 ))}
