@@ -89,6 +89,12 @@ export default function Terminal() {
   resRef.current = res;
   const replayRef = useRef(null);
   replayRef.current = replay;
+  // starting a past moment on a phone or narrow window closes the side panel, so the chart is what you see;
+  // a reveal (ahead > 0) keeps the panel open so the outcome cards stay in view
+  const startReplay = useCallback((r) => {
+    setReplay(r);
+    if (r && !r.ahead && narrow) setPanelOpen(false);
+  }, [narrow]);
 
   // the chart follows the app's light or dark mode (see lib/chartTheme.js)
   const theme = useMemo(() => chartThemeFor(settings.theme, settings.chart, settings.candles),
@@ -440,7 +446,7 @@ export default function Terminal() {
         ) : null}
         {tab === "news" ? <NewsPanel symbol={symbol} tf={tf} /> : null}
         {tab === "divergence" ? <DivergencePanel symbol={symbol} tf={tf} /> : null}
-        {tab === "replay" ? <ReplayPanel symbol={symbol} tf={tf} replay={replay} setReplay={setReplay} /> : null}
+        {tab === "replay" ? <ReplayPanel symbol={symbol} tf={tf} replay={replay} setReplay={startReplay} /> : null}
       </div>
     </>
   );

@@ -125,6 +125,9 @@ function TV() {
       <div style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
         <div className="tv-head">
           <Brand href="/terminal" size={44} />
+          <Link className="btn sm" href={`/terminal?s=${encodeURIComponent(symbol)}&tf=${tf}`} aria-label="Back to terminal">
+            <Icon name="chevronLeft" size={16} /> Back to terminal
+          </Link>
           <div className="grow" />
           <b style={{ fontSize: "1.6rem", fontFamily: "var(--font-display)" }}>{meta ? meta.display : symbol}</b>
           <span className="num" style={{ fontSize: "1.5rem", fontWeight: 800 }}>{meta ? fmtPrice(meta.price, dec) : ""}</span>
