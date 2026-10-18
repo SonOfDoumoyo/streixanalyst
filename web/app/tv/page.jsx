@@ -153,7 +153,7 @@ function TV() {
           <div className="card" style={{ textAlign: "center", padding: "2rem 1.4rem" }}>
             <Icon name="zap" size={44} style={{ margin: "0 auto 0.8rem", color: "var(--brand-2)" }} />
             <h2 style={{ margin: "0 0 0.4rem", fontFamily: "var(--font-display)" }}>Press A to analyse</h2>
-            <p className="muted" style={{ margin: "0 0 1.2rem" }}>← → change market · D detail · R rotate · F full screen</p>
+            <p className="muted" style={{ margin: "0 0 1.2rem" }}>Use the arrow keys to change market. D changes detail, R rotates, F goes full screen.</p>
             <button className="btn primary lg block" onClick={analyse} disabled={busy}><Icon name="zap" size={20} /> Analyse {meta ? meta.display : symbol}</button>
           </div>
         ) : (

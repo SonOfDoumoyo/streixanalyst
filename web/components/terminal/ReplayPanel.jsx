@@ -50,7 +50,7 @@ function OutcomeCard({ title, o, dec }) {
   const tone = o.status === "tp" ? "up" : o.status === "sl" ? "down" : o.status === "open" || o.status === "pending" ? "warn" : "";
   const side = o.side === "long" ? "Long" : o.side === "short" ? "Short" : "";
   return (
-    <Card title={`${title}${side ? ` · ${side}` : ""}`} tone={tone} badge={WORDS[o.status] || o.status}>
+    <Card title={side ? `${title}, ${side.toLowerCase()}` : title} tone={tone} badge={WORDS[o.status] || o.status}>
       {typeof o.r === "number" ? (
         <div className="replay-r num">
           <span className={o.r >= 0 ? "up" : "down"}>{o.r >= 0 ? "+" : ""}{o.r.toFixed(2)}R</span>
