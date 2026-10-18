@@ -16,7 +16,7 @@ const FEATURES = [
   ["sliders", "Your strategy, tested honestly", "Describe your rules in plain words. The strategy lab backtests them with next-candle entries and real costs, and shows whether they're firing right now."],
   ["bell", "Alerts that wait for you", "Price, level and plan alerts, plus strategy alerts on every closed candle, in the app, your browser and by email."],
   ["shield", "A track record you can check", "Every trade call is followed on live prices until it wins, loses or expires. The results are public, losses included."],
-  ["users", "Built for teaching", "Organizations get one flat price for the whole team, with a class code, email invites and a TV / presentation mode for the big screen."],
+  ["users", "Built for teaching", "Organizations pay per person, so you only pay for the people on your team. Class codes, email invites and a TV / presentation mode for the big screen."],
 ];
 
 const FAQ = [

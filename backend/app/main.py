@@ -87,6 +87,12 @@ def _fast_background():
                 tracker.run_once()
             except Exception:
                 log.exception("tracker failed")
+        try:
+            from .services import crypto
+            with SessionLocal() as db:
+                crypto.sweep(db)
+        except Exception:
+            log.exception("crypto sweep failed")
         i += 1
         time.sleep(30)
 

@@ -55,6 +55,8 @@ class User(Base):
     streak_last: Mapped[str | None] = mapped_column(String(10), nullable=True)
     reset_token_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
     reset_token_expires: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    verify_token_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)      # email confirmation
+    verify_token_expires: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)   # when they ticked the Terms
     terms_version: Mapped[str | None] = mapped_column(String(20), nullable=True)           # which Terms they accepted
     learn_consent: Mapped[bool] = mapped_column(Boolean, default=False)                   # may we learn from their charts?
@@ -114,6 +116,10 @@ class Payment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     verified_by: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    crypto_network: Mapped[str | None] = mapped_column(String(12), nullable=True)           # trc20 | bep20 | erc20
+    crypto_amount: Mapped[str | None] = mapped_column(String(24), nullable=True)            # the exact USDT amount due
+    crypto_address: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)            # crypto window closes
 
     user = relationship("User", lazy="joined")
 

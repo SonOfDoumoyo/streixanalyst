@@ -33,7 +33,7 @@ def new_reference(prefix="SA"):
 
 def plan_label(p):
     if p.plan == "org":
-        return f"Organization (whole team) · {p.months} month{'s' if p.months > 1 else ''}"
+        return f"Organization · {p.seats} seat{'s' if p.seats != 1 else ''} · {p.months} month{'s' if p.months > 1 else ''}"
     return f"Pro · {p.months} month{'s' if p.months > 1 else ''}"
 
 

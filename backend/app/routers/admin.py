@@ -217,7 +217,7 @@ def get_settings(admin: User = Depends(admin_user), db: Session = Depends(get_db
 def put_settings(body: SettingsIn, admin: User = Depends(admin_user), db: Session = Depends(get_db)):
     if body.pricing is not None:
         p = dict(DEFAULT_PRICING)
-        for k in ("pro_monthly", "org_monthly", "usd_rate"):        # dollars per month, and naira per $1
+        for k in ("pro_monthly", "org_seat_monthly", "usd_rate"):    # dollars per month (per person for orgs), naira per $1
             if k in body.pricing:
                 v = float(body.pricing[k])
                 if v <= 0:

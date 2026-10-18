@@ -5,6 +5,7 @@ import { DEFAULT_SETTINGS, loadLocalSettings, mergeSettings, saveLocalSettings }
 import Icon from "@/components/Icons";
 import LoadingGlass from "@/components/LoadingGlass";
 import TermsGate from "@/components/TermsGate";
+import VerifyGate from "@/components/VerifyGate";
 
 const AuthCtx = createContext(null);
 const ToastCtx = createContext(() => {});
@@ -105,6 +106,7 @@ export default function Providers({ children }) {
         <LoadingGlass />
         {children}
         <TermsGate />
+        <VerifyGate />
         <ToastHost toasts={toasts} dismiss={dismiss} />
       </ToastCtx.Provider>
     </AuthCtx.Provider>

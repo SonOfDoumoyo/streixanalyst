@@ -30,7 +30,7 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: TWELVEDATA_ENABLED
-        value: "0"
+        sync: false          # set to 1 once you have a Twelve Data plan
       - key: TWELVEDATA_API_KEY
         sync: false
       - key: VAPID_PUBLIC_KEY
@@ -58,11 +58,38 @@ services:
         sync: false
       - key: OPAY_BASE_URL
         sync: false
-      # Crypto: your wallet address shown at checkout.
+      # USDT crypto payments: the wallet that receives them, network (trc20 | bep20 | erc20) and explorer API key.
       - key: CRYPTO_WALLET_ADDRESS
         sync: false
-      - key: MANUAL_ACCOUNTS
+      - key: CRYPTO_NETWORK
+        value: trc20
+      - key: CRYPTO_EXPLORER_API_KEY
         sync: false
+      # Email: confirmation links and password resets. Any SMTP provider.
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      # Sign in with Google / LinkedIn.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: LINKEDIN_CLIENT_ID
+        sync: false
+      - key: LINKEDIN_CLIENT_SECRET
+        sync: false
+      # New accounts get this many days of full access.
+      - key: TRIAL_DAYS
+        value: "7"
+      - key: USD_NGN_RATE
+        value: "1550"
 databases:
   - name: streixanalyst-db
     region: frankfurt

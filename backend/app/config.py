@@ -79,7 +79,7 @@ class Settings:
 
         self.admin_email = (env("ADMIN_EMAIL") or "").strip().lower() or None
         self.admin_password = env("ADMIN_PASSWORD")
-        self.trial_days = env_int("TRIAL_DAYS", 30)
+        self.trial_days = env_int("TRIAL_DAYS", 7)
 
         self.google_client_id = env("GOOGLE_CLIENT_ID")
         self.google_client_secret = env("GOOGLE_CLIENT_SECRET")
@@ -105,6 +105,11 @@ class Settings:
         self.opay_public_key = env("OPAY_PUBLIC_KEY")
         self.opay_secret_key = env("OPAY_SECRET_KEY")
         self.opay_base_url = env("OPAY_BASE_URL", "https://liveapi.opaycheckout.com").rstrip("/")
+
+        # USDT payments: the company wallet that receives them, the network, and a free block-explorer API key.
+        self.crypto_network = (env("CRYPTO_NETWORK", "trc20") or "trc20").strip().lower()
+        self.crypto_wallet_address = (env("CRYPTO_WALLET_ADDRESS") or "").strip() or None
+        self.crypto_explorer_api_key = env("CRYPTO_EXPLORER_API_KEY")
 
         # bank accounts for manual transfers, e.g. MANUAL_ACCOUNTS='[{"bank":"OPay","number":"...","name":"..."}]'
         try:
@@ -151,6 +156,10 @@ class Settings:
     @property
     def opay_enabled(self):
         return bool(self.opay_merchant_id and self.opay_public_key and self.opay_secret_key)
+
+    @property
+    def crypto_enabled(self):
+        return bool(self.crypto_wallet_address)
 
     @property
     def push_enabled(self):

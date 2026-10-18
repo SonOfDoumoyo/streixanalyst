@@ -25,7 +25,7 @@ export default function TermsPage() {
       <p>Every new account gets a {trial}-day free trial with every feature. After the trial, the Free plan stays free with daily limits. Paid plans are:</p>
       <ul>
         <li><b>Pro</b>: US $15 per month, for one person.</li>
-        <li><b>Organization</b>: US $30 per month, one flat price for the whole organization, with every member included.</li>
+        <li><b>Organization</b>: priced per person per month, shown on the pricing page. You pay for each person you add.</li>
       </ul>
       <p>Prices are in US dollars. Card and bank payments are charged in naira at the exchange rate shown at checkout. Paid plans are paid in advance for the period you choose (1, 3 or 12 months, with the discount shown). They do not renew automatically.</p>
 

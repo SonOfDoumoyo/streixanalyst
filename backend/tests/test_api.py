@@ -91,7 +91,7 @@ def t_health(c):
     r = c.get("/api/health")
     check(r.status_code == 200 and r.json()["ok"], r.text)
     r = c.get("/api/config")
-    check(r.json()["trial_days"] == 30 and r.json()["google"] is False, r.text)
+    check(r.json()["trial_days"] == 7 and r.json()["google"] is False, r.text)
     r = c.get("/api/auth/providers")
     check(r.json() == dict(google=False, linkedin=False, email=True, password_reset_email=False), r.text)
 
@@ -117,7 +117,7 @@ def t_signup_and_me(c):
     check(u["email"] == "ada@example.com" and "token" not in r.json(), u)
     check("sa_session" in r.cookies or "sa_session" in c.cookies, "session cookie")
     e = u["entitlements"]
-    check(e["tier"] == "trial" and e["trial_days_left"] == 30 and "strategy" in e["features"], e)
+    check(e["tier"] == "trial" and e["trial_days_left"] == 7 and "strategy" in e["features"], e)
     me = c.get("/api/auth/me").json()["user"]
     check(me["streak_days"] == 1 and me["needs_onboarding"] is False, me)
     check(signup(c, "ada@example.com").status_code == 409, "duplicate email")
@@ -339,8 +339,8 @@ def t_paystack(c):
     plans = c.get("/api/billing/plans").json()
     # Pro is $15 a month; the naira charge is $15 x 1550 = ₦23,250. Yearly is $15 x 12 x 0.8 = $144 = ₦223,200.
     check(plans["quotes"]["pro"]["1"]["kobo"] == 2_325_000 and plans["quotes"]["pro"]["12"]["naira"] == 223_200, plans["quotes"])
-    check(plans["quotes"]["org"]["1"]["usd"] == 30, "organization is a flat $30 a month")
-    check(plans["methods"] == dict(paystack=True, opay=True, dedicated_account=True, manual=True), plans["methods"])
+    check(plans["quotes"]["org"]["1"]["usd"] == 10, "organization is $10 per person a month (one person by default)")
+    check(plans["methods"] == dict(paystack=True, opay=True, dedicated_account=True, manual=True, crypto=False), plans["methods"])
     check(plans["manual_accounts"][0]["number"] == "9160309499", plans["manual_accounts"])
     r = c.post("/api/billing/checkout", json=dict(plan="pro", months=1, provider="paystack", channel="ussd"), headers=H)
     check(r.status_code == 200 and r.json()["url"].startswith("https://checkout.paystack.com/"), r.text)

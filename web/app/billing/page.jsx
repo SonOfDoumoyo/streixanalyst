@@ -38,53 +38,77 @@ function AccountBox({ bank, number, name, amount, reference }) {
   );
 }
 
+const ts = (s) => new Date(/Z|[+-]\d\d:?\d\d$/.test(s) ? s : `${s}Z`).getTime();
+
 function Checkout({ open, onClose, plan, months, plans, user, onDone, toast }) {
   const [method, setMethod] = useState(null);
-  const [channel, setChannel] = useState("any");
+  const [seats, setSeats] = useState(5);
+  const [quote, setQuote] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(null);
-  const [manual, setManual] = useState(null);
-  const [acct, setAcct] = useState(0);
   const [dva, setDva] = useState(null);
+  const [crypto, setCrypto] = useState(null);
+  const [now, setNow] = useState(Date.now());
   const [phone, setPhone] = useState((user && user.phone) || "");
-  const [proof, setProof] = useState({ name: user ? user.name : "", file: null });
+  const isOrg = plan === "org";
+  const seatCount = isOrg ? Math.max(1, Math.min(500, Number(seats) || 1)) : 1;
+  const methods = (plans && plans.methods) || {};
+  const unconfirmed = !!user && user.email_verified === false;
+
   useEffect(() => {
-    if (open) {
-      setMethod(null); setErr(null); setManual(null); setDva(null); setBusy(false);
-    }
+    if (open) { setMethod(null); setErr(null); setDva(null); setCrypto(null); setBusy(false); }
   }, [open]);
+
+  // the server quotes every price; the page only shows what it returns
+  useEffect(() => {
+    if (!open) return undefined;
+    let alive = true;
+    const q = new URLSearchParams({ plan, months: String(months), seats: String(seatCount) });
+    get(`/billing/quote?${q}`).then((d) => { if (alive) setQuote(d); }).catch(() => {});
+    return () => { alive = false; };
+  }, [open, plan, months, seatCount]);
+
+  // a crypto payment is confirmed by the server, which checks the blockchain; this page only asks until it's paid
+  useEffect(() => {
+    if (!open || !crypto) return undefined;
+    let alive = true;
+    const check = async () => {
+      try {
+        const d = await get(`/billing/verify?reference=${encodeURIComponent(crypto.reference)}`);
+        if (!alive) return;
+        if (d.result && d.result.ok) {
+          toast("Payment received. Your plan is active.", "success", 7000);
+          onDone(); onClose();
+        } else if (d.result && d.result.status === "expired") {
+          setCrypto((c) => (c ? { ...c, expired: true } : c));
+        }
+      } catch (e) { /* keep waiting; the next check will try again */ }
+    };
+    check();
+    const poll = setInterval(check, 20000);
+    const clock = setInterval(() => setNow(Date.now()), 1000);
+    return () => { alive = false; clearInterval(poll); clearInterval(clock); };
+  }, [open, crypto && crypto.reference]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!open || !plans) return null;
-  // the server quotes the price; the client only shows it. Organization is one flat price for the whole team.
-  const q = plans.quotes[plan === "org" ? "org" : "pro"][String(months)];
-  const disc = Number(q.discount || 0);
-  const naira = q.naira;
-  const methods = plans.methods;
-  const body = { plan, months };
-  const go = async (provider) => {
+
+  const title = isOrg ? "StreixAnalyst Organization" : "StreixAnalyst Pro";
+  const summary = quote
+    ? `${months === 1 ? "1 month" : `${months} months`}${isOrg ? ` · ${seatCount} ${seatCount === 1 ? "person" : "people"}` : ""} · $${quote.usd}${quote.discount ? ` · save ${Math.round(quote.discount * 100)}%` : ""}`
+    : "Calculating your price…";
+  const perPerson = plans.pricing.org_seat_monthly;
+  const body = { plan, months, seats: seatCount };
+
+  const go = async (provider, channel = "any") => {
     setBusy(true); setErr(null);
     try {
       const d = await post("/billing/checkout", { ...body, provider, channel });
       window.location.href = d.url;
     } catch (e) { setErr(e.message); setBusy(false); }
   };
-  const startManual = async () => {
+  const startCrypto = async () => {
     setBusy(true); setErr(null);
-    try { setManual(await post("/billing/manual/start", { ...body, account: acct })); } catch (e) { setErr(e.message); }
-    setBusy(false);
-  };
-  const sendProof = async (e) => {
-    e.preventDefault();
-    if (!proof.file) return setErr("Attach your transfer receipt (screenshot or PDF).");
-    setBusy(true); setErr(null);
-    try {
-      const fd = new FormData();
-      fd.append("payer_name", proof.name);
-      fd.append("file", proof.file);
-      const d = await api(`/billing/manual/${manual.payment.reference}/proof`, { method: "POST", form: fd });
-      toast(d.message, "success", 7000);
-      onDone();
-      onClose();
-    } catch (ex) { setErr(ex.message); }
+    try { setCrypto(await post("/billing/checkout", { ...body, provider: "crypto" })); } catch (e) { setErr(e.message); }
     setBusy(false);
   };
   const startDva = async () => {
@@ -96,51 +120,48 @@ function Checkout({ open, onClose, plan, months, plans, user, onDone, toast }) {
     } catch (e) { setErr(e.message); }
     setBusy(false);
   };
-  const title = plan === "org" ? "StreixAnalyst Organization" : "StreixAnalyst Pro";
+
+  const option = (icon, color, name, desc, onClick, disabled) => (
+    <button className="card row" style={{ textAlign: "left", cursor: "pointer", padding: 14 }} onClick={onClick} disabled={disabled}>
+      <Icon name={icon} size={24} style={{ color }} />
+      <div className="grow"><b>{name}</b><div className="faint" style={{ fontSize: "0.85rem" }}>{desc}</div></div>
+      <Icon name="chevronRight" size={18} />
+    </button>
+  );
+
+  const secondsLeft = crypto && crypto.expires_at ? Math.max(0, Math.floor((ts(crypto.expires_at) - now) / 1000)) : 0;
+  const clock = `${String(Math.floor(secondsLeft / 60)).padStart(2, "0")}:${String(secondsLeft % 60).padStart(2, "0")}`;
+
   return (
-    <Modal open={open} onClose={onClose} title={title} subtitle={`${months === 1 ? "1 month" : `${months} months`} · $${q.usd} (${fmtNaira(naira)})${disc ? ` · save ${Math.round(disc * 100)}%` : ""}`} wide>
-      {!method ? (
+    <Modal open={open} onClose={onClose} title={title} subtitle={summary} wide>
+      {unconfirmed ? <div className="badge warn" style={{ height: "auto", padding: 10, whiteSpace: "normal", marginTop: 12 }}>Confirm your email before you pay. Check your inbox for the link.</div> : null}
+
+      {!method && !crypto ? (
         <div className="stack" style={{ marginTop: 14 }}>
+          {isOrg ? (
+            <Field label="How many people?" hint={`$${perPerson} per person a month. You can add more people later.`}>
+              <input className="input num" type="number" min="1" max="500" value={seats} onChange={(e) => setSeats(e.target.value)} />
+            </Field>
+          ) : null}
           <div className="label">How would you like to pay?</div>
-          {methods.paystack ? (
-            <button className="card row" style={{ textAlign: "left", cursor: "pointer", padding: 14 }} onClick={() => setMethod("paystack")}>
-              <Icon name="card" size={24} style={{ color: "var(--brand-2)" }} />
-              <div className="grow"><b>Debit or credit card</b><div className="faint" style={{ fontSize: "0.85rem" }}>Visa, Mastercard, Verve — secured by Paystack. Confirmed automatically.</div></div>
-              <Icon name="chevronRight" size={18} />
-            </button>
-          ) : null}
-          {methods.opay ? (
-            <button className="card row" style={{ textAlign: "left", cursor: "pointer", padding: 14 }} onClick={() => go("opay")} disabled={busy}>
-              <Icon name="phone" size={24} style={{ color: "#2fd3a6" }} />
-              <div className="grow"><b>OPay</b><div className="faint" style={{ fontSize: "0.85rem" }}>Pay with your OPay wallet or card on OPay's checkout</div></div>
-              <Icon name="chevronRight" size={18} />
-            </button>
-          ) : null}
-          {methods.dedicated_account ? (
-            <button className="card row" style={{ textAlign: "left", cursor: "pointer", padding: 14 }} onClick={() => setMethod("dva")}>
-              <Icon name="bank" size={24} style={{ color: "#ffc766" }} />
-              <div className="grow"><b>Bank transfer</b><div className="faint" style={{ fontSize: "0.85rem" }}>Transfer from any bank app to your personal account number. Confirmed automatically.</div></div>
-              <Icon name="chevronRight" size={18} />
-            </button>
-          ) : null}
-          {!methods.paystack && !methods.opay && !methods.dedicated_account ? <div className="hint">Payments aren't set up on this server yet.</div> : null}
+          {methods.paystack ? option("card", "var(--brand-2)", "Debit or credit card", "Visa, Mastercard, Verve. Confirmed automatically.", () => setMethod("card"), busy) : null}
+          {methods.dedicated_account ? option("bank", "#ffc766", "Bank transfer", "Send from any bank app to your personal account number. Confirmed automatically.", () => setMethod("dva"), busy) : null}
+          {methods.opay ? option("phone", "#2fd3a6", "OPay", "Pay with your OPay wallet or card on OPay's checkout. Confirmed automatically.", () => go("opay"), busy) : null}
+          {methods.crypto ? option("shield", "var(--brand-2)", "USDT (crypto)", "Send USDT to our wallet. Confirmed on the blockchain automatically.", () => setMethod("crypto"), busy) : null}
+          {!methods.paystack && !methods.opay && !methods.dedicated_account && !methods.crypto ? <div className="hint">Payments aren't set up on this server yet.</div> : null}
         </div>
       ) : null}
-      {method === "paystack" ? (
+
+      {method === "card" ? (
         <div className="stack" style={{ marginTop: 6 }}>
-          <div className="label">Pay with</div>
-          <div className="seg brand" style={{ flexWrap: "wrap" }}>
-            {[["any", "Any method"], ["card", "Card"], ["ussd", "USSD"], ["bank_transfer", "Bank transfer"], ["bank", "Bank account"]].map(([c, l]) => (
-              <button key={c} className={channel === c ? "on" : ""} onClick={() => setChannel(c)}>{l}</button>
-            ))}
-          </div>
           <div className="hint">You'll finish on Paystack's secure page, then come straight back here. We confirm the payment with Paystack before unlocking your plan.</div>
           <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
             <button className="btn ghost" onClick={() => setMethod(null)}>Back</button>
-            <button className="btn primary" disabled={busy} onClick={() => go("paystack")}>{busy ? <span className="spinner" /> : <Icon name="shield" size={16} />} Pay {fmtNaira(naira)}</button>
+            <button className="btn primary" disabled={busy || unconfirmed} onClick={() => go("paystack")}>{busy ? <span className="spinner" /> : <Icon name="shield" size={16} />} Pay {quote ? fmtNaira(quote.naira) : ""}</button>
           </div>
         </div>
       ) : null}
+
       {method === "dva" ? (
         <div className="stack" style={{ marginTop: 6 }}>
           {!dva ? (
@@ -150,12 +171,12 @@ function Checkout({ open, onClose, plan, months, plans, user, onDone, toast }) {
               </Field>
               <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
                 <button className="btn ghost" onClick={() => setMethod(null)}>Back</button>
-                <button className="btn primary" disabled={busy || !phone} onClick={startDva}>{busy ? <span className="spinner" /> : null} Get my account number</button>
+                <button className="btn primary" disabled={busy || !phone || unconfirmed} onClick={startDva}>{busy ? <span className="spinner" /> : null} Get my account number</button>
               </div>
             </>
           ) : (
             <>
-              <div className="muted">Transfer exactly <b>{fmtNaira(dva.amount)}</b> from any bank app to your personal account below. Your plan unlocks automatically once the bank confirms it — usually within minutes.</div>
+              <div className="muted">Transfer exactly <b>{fmtNaira(dva.amount)}</b> from any bank app to your personal account below. Your plan unlocks automatically once the bank confirms it, usually within minutes.</div>
               {dva.account && dva.account.account_number ? (
                 <AccountBox bank={dva.account.bank_name} number={dva.account.account_number} name={dva.account.account_name} amount={dva.amount} />
               ) : <div className="badge warn" style={{ height: "auto", padding: 10, whiteSpace: "normal" }}>Your account number is being created. Refresh this page in a minute.</div>}
@@ -164,41 +185,55 @@ function Checkout({ open, onClose, plan, months, plans, user, onDone, toast }) {
           )}
         </div>
       ) : null}
-      {method === "manual" ? (
+
+      {method === "crypto" && !crypto ? (
         <div className="stack" style={{ marginTop: 6 }}>
-          {!manual ? (
+          <div className="hint">You'll get one wallet address and an exact USDT amount for this payment. Send exactly that amount on the network we show. Your plan activates automatically once the transfer is confirmed on the blockchain.</div>
+          <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
+            <button className="btn ghost" onClick={() => setMethod(null)}>Back</button>
+            <button className="btn primary" disabled={busy || unconfirmed} onClick={startCrypto}>{busy ? <span className="spinner" /> : null} Create payment</button>
+          </div>
+        </div>
+      ) : null}
+
+      {crypto ? (
+        <div className="stack" style={{ marginTop: 6 }}>
+          {crypto.expired ? (
             <>
-              <div className="label">Choose the account you'll send to</div>
-              <div className="stack" style={{ gap: 8 }}>
-                {plans.manual_accounts.map((a, i) => (
-                  <label key={i} className="card row" style={{ padding: 12, cursor: "pointer", borderColor: acct === i ? "var(--brand)" : undefined }}>
-                    <input type="radio" name="acct" checked={acct === i} onChange={() => setAcct(i)} style={{ accentColor: "var(--brand)" }} />
-                    <div className="grow"><b>{a.bank}</b> · <span className="num">{a.number}</span><div className="faint" style={{ fontSize: "0.82rem" }}>{a.name}</div></div>
-                  </label>
-                ))}
-              </div>
+              <div className="badge warn" style={{ height: "auto", padding: 10, whiteSpace: "normal" }}>This payment window has closed. If you already sent the transfer, contact support with the reference below.</div>
               <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
-                <button className="btn ghost" onClick={() => setMethod(null)}>Back</button>
-                <button className="btn primary" disabled={busy} onClick={startManual}>{busy ? <span className="spinner" /> : null} Continue</button>
+                <button className="btn ghost" onClick={onClose}>Close</button>
+                <button className="btn primary" onClick={() => { setCrypto(null); setMethod("crypto"); }}>Start a new payment</button>
               </div>
             </>
           ) : (
-            <form className="stack" onSubmit={sendProof}>
-              <div className="muted">{manual.instructions}</div>
-              <AccountBox bank={manual.account.bank} number={manual.account.number} name={manual.account.name} amount={manual.amount} reference={manual.payment.reference} />
-              <div className="grid-2">
-                <Field label="Name on the sending account"><input className="input" required value={proof.name} onChange={(e) => setProof({ ...proof, name: e.target.value })} /></Field>
-                <Field label="Receipt (screenshot or PDF)"><input className="input" style={{ paddingTop: 9 }} type="file" accept="image/png,image/jpeg,image/webp,application/pdf" onChange={(e) => setProof({ ...proof, file: e.target.files && e.target.files[0] })} /></Field>
+            <>
+              <div className="card" style={{ padding: 16, background: "var(--bg-3)" }}>
+                <div className="faint" style={{ fontSize: "0.78rem", fontWeight: 700, letterSpacing: "0.08em" }}>{crypto.label}</div>
+                <div className="row" style={{ gap: 6, marginTop: 6 }}>
+                  <b className="num" style={{ fontSize: "1.7rem" }}>{crypto.amount} USDT</b>
+                  <Copy text={crypto.amount} />
+                </div>
+                <div className="muted" style={{ fontSize: "0.85rem" }}>About ${crypto.usd} (the few extra cents identify your payment)</div>
               </div>
-              <div className="hint">You can also upload the receipt later from your payment history below.</div>
-              <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
-                <button type="button" className="btn ghost" onClick={() => { onDone(); onClose(); }}>Upload later</button>
-                <button className="btn primary" disabled={busy}>{busy ? <span className="spinner" /> : <Icon name="upload" size={16} />} Send receipt</button>
+              <div className="card" style={{ padding: 16 }}>
+                <div className="faint" style={{ fontSize: "0.78rem", fontWeight: 700, letterSpacing: "0.08em" }}>WALLET ADDRESS</div>
+                <div className="row" style={{ gap: 6, marginTop: 6, alignItems: "flex-start" }}>
+                  <span className="num" style={{ wordBreak: "break-all", fontSize: "0.92rem" }}>{crypto.address}</span>
+                  <Copy text={crypto.address} />
+                </div>
               </div>
-            </form>
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <span className="muted">Window closes in</span>
+                <b className="num">{clock}</b>
+              </div>
+              <div className="hint">Send exactly {crypto.amount} USDT on {crypto.label.split(" on ")[1] || "the network above"}. Sending on another network, or a different amount, means we can't match your payment. If you send from an exchange, check the amount that will arrive before you confirm.</div>
+              <div className="row" style={{ gap: 8, alignItems: "center" }}><span className="spinner" /> <span className="muted">Waiting for your transfer…</span></div>
+            </>
           )}
         </div>
       ) : null}
+
       {err ? <div className="error-text" style={{ marginTop: 10 }}>{err}</div> : null}
     </Modal>
   );

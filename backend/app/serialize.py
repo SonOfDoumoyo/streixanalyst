@@ -35,7 +35,14 @@ def user_out(db, user):
         # Terms: the web app shows the gate until the person has accepted the current version
         terms_version=user.terms_version, terms_ok=user.terms_version == settings.terms_version,
         learn_consent=bool(user.learn_consent),
+        # without an email server nothing can be confirmed, so the app treats every account as confirmed
+        email_verified=bool(user.email_verified) or not _mail_configured(),
     )
+
+
+def _mail_configured():
+    from .services import mailer
+    return mailer.configured()
 
 
 def payment_out(p, admin=False):
@@ -43,7 +50,8 @@ def payment_out(p, admin=False):
              seats=p.seats, amount=p.amount_kobo / 100, paid=None if p.paid_kobo is None else p.paid_kobo / 100,
              currency=p.currency, status=p.status, applied=p.applied, account_label=p.account_label,
              payer_name=p.payer_name, has_proof=bool(p.proof_path), note=p.note, created_at=iso(p.created_at),
-             verified_at=iso(p.verified_at))
+             verified_at=iso(p.verified_at), crypto_network=p.crypto_network, crypto_amount=p.crypto_amount,
+             crypto_address=p.crypto_address, expires_at=iso(p.expires_at))
     if admin:
         u = p.user
         d.update(user=dict(id=u.id, email=u.email, name=u.name) if u else None, provider_ref=p.provider_ref,

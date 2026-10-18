@@ -48,11 +48,11 @@ DEFAULT_LIMITS = {
     "pro": dict(analysis=150, review=60, ai=200, strategy=40, practice=40, alerts=50, watchlist=200, layouts=20),
     "org": dict(analysis=300, review=150, ai=400, strategy=80, practice=100, alerts=100, watchlist=300, layouts=50),
 }
-ORG_SEAT_CAP = 5000                  # the Organization plan has a flat price; this only stops abuse, it is not a seat price
+ORG_SEAT_CAP = 500                   # most seats one organization can buy in a single checkout
 DEFAULT_PRICING = {
     "currency": "USD",               # prices are shown in dollars
     "pro_monthly": 15,               # $ per month, for one person
-    "org_monthly": 30,               # $ per month, flat, for the whole organization (every member included)
+    "org_seat_monthly": 10,          # $ per person per month on the Organization plan (admin can change it)
     "discounts": {"1": 0.0, "3": 0.10, "12": 0.20},
     "usd_rate": settings.usd_ngn_rate,   # ₦ per $1: card and bank payments are taken in naira at this rate
 }
@@ -192,7 +192,7 @@ def quote(db, plan, months=1, seats=1):
     """Server-side price. The client never decides the amount.
 
     Prices are in dollars. The charge is in naira at the usd_rate setting, rounded to ₦50, and kobo is what Paystack
-    expects. The Organization plan is one flat price for the whole team, so `seats` is only a capacity cap."""
+    expects. The Organization plan costs the per-seat price for every person the owner pays for (`seats`)."""
     P = pricing(db)
     months = int(months)
     if months not in (1, 3, 12):
@@ -202,8 +202,8 @@ def quote(db, plan, months=1, seats=1):
         seats = 1
         usd = float(P["pro_monthly"]) * months * (1 - disc)
     elif plan == "org":
-        seats = ORG_SEAT_CAP
-        usd = float(P["org_monthly"]) * months * (1 - disc)
+        seats = max(1, min(int(seats or 1), ORG_SEAT_CAP))
+        usd = float(P["org_seat_monthly"]) * seats * months * (1 - disc)
     else:
         raise HTTPException(400, "Unknown plan.")
     rate = float(P.get("usd_rate") or settings.usd_ngn_rate)

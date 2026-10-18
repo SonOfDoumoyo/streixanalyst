@@ -41,7 +41,7 @@ const ORG_LIST = (L) => [
   "Classroom: members join with a class code or email",
   "Teach mode and TV / presentation mode",
   "Organization branding",
-  "One bill for the whole team",
+  "One bill for your whole team, paid per person",
 ];
 
 // Prices are in US dollars. Card and bank payments are taken in naira at the rate shown.
@@ -95,8 +95,8 @@ export default function PricingCards({ plans, months = 1, onChoose, current }) {
       <div className="card price-card">
         <div>
           <div className="eyebrow" style={{ color: "var(--violet)" }}>Organization</div>
-          <div className="amt">{usd(org.usd)}<span className="faint" style={{ fontSize: "1rem", fontWeight: 600 }}>{per}</span></div>
-          <div className="faint">One flat price for the whole team · {charge(org)}</div>
+          <div className="amt">{usd(plans.pricing.org_seat_monthly)}<span className="faint" style={{ fontSize: "1rem", fontWeight: 600 }}> per person{per}</span></div>
+          <div className="faint">You pay for each person on your team, with a minimum of one</div>
         </div>
         <ul>{ORG_LIST(L.org.limits).map((t) => <Item key={t} t={t} />)}</ul>
         <div className="grow" />

@@ -63,6 +63,10 @@ class ForgotIn(BaseModel):
     email: str = Field(max_length=255)
 
 
+class VerifyIn(BaseModel):
+    token: str
+
+
 class ResetIn(BaseModel):
     token: str
     new_password: str = Field(max_length=200)
@@ -109,6 +113,16 @@ def session_response(db, user, status=200, request: Request | None = None):
     return resp
 
 
+def send_verification(user):
+    """Put a fresh confirmation link in the inbox (valid 48 hours). The caller commits."""
+    token = random_code(32, "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789")
+    user.verify_token_hash, user.verify_token_expires = sha256(token), utcnow() + timedelta(hours=48)
+    link = f"{settings.frontend_url}/verify?token={token}"
+    mailer.send(user.email, "Confirm your StreixAnalyst email",
+                f"Hi {user.first_name or 'there'},\n\nConfirm your email to finish setting up your StreixAnalyst account:\n"
+                f"{link}\n\nThe link works for 48 hours. If you didn't create an account, ignore this email.\n\n— StreixAnalyst")
+
+
 @router.post("/signup")
 def signup(body: SignupIn, request: Request, db: Session = Depends(get_db)):
     if not signup_limiter.hit(client_ip(request)):
@@ -127,6 +141,10 @@ def signup(body: SignupIn, request: Request, db: Session = Depends(get_db)):
         raise HTTPException(409, "An account with this email already exists. Sign in instead.")
     u = new_user(db, email, body.first_name, body.last_name, body.experience, body.password)
     record_terms(u, body.learn)
+    if mailer.configured():
+        send_verification(u)
+    else:
+        u.email_verified = True      # no email server yet: nothing to confirm with
     if body.invite_code:
         join_org(db, u, body.invite_code)
     db.commit()
@@ -211,6 +229,30 @@ def change_password(body: PasswordIn, user: User = Depends(current_user), db: Se
     user.token_version += 1                       # signs out other devices
     db.commit()
     return session_response(db, user)
+
+
+@router.post("/verify-email")
+def verify_email(body: VerifyIn, db: Session = Depends(get_db)):
+    u = db.execute(select(User).where(User.verify_token_hash == sha256(body.token.strip()))).scalar_one_or_none()
+    if not u or not u.verify_token_expires or u.verify_token_expires < utcnow():
+        raise HTTPException(400, "This confirmation link has expired. Ask for a new one from your account.")
+    u.email_verified = True
+    u.verify_token_hash = u.verify_token_expires = None
+    db.commit()
+    return session_response(db, u)
+
+
+@router.post("/resend-verification")
+def resend_verification(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    if user.email_verified:
+        return dict(ok=True, message="Your email is already confirmed.")
+    if not mailer.configured():
+        raise HTTPException(503, "Email isn't set up on this server yet, so there is nothing to confirm.")
+    if not login_limiter.hit(f"verify|{user.id}"):
+        raise HTTPException(429, "Please wait a few minutes before asking for another link.")
+    send_verification(user)
+    db.commit()
+    return dict(ok=True, message="We've sent a new confirmation link to your email.")
 
 
 @router.post("/forgot")

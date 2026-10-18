@@ -16,7 +16,7 @@ from ..models import Payment, User, VirtualAccount, iso
 from ..plans import plans_overview, quote
 from ..security import random_code
 from ..serialize import payment_out, user_out
-from ..services import billing, opay, paystack
+from ..services import billing, crypto, mailer, opay, paystack
 
 log = logging.getLogger("streix.billing")
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -29,7 +29,7 @@ class CheckoutIn(BaseModel):
     plan: str
     months: int = 1
     seats: int = 1
-    provider: str = "paystack"          # paystack | opay
+    provider: str = "paystack"          # paystack | opay | crypto
     channel: str = "any"                # card | ussd | bank | bank_transfer | any
 
 
@@ -46,7 +46,12 @@ class ManualIn(IntentIn):
 def methods(db):
     return dict(paystack=settings.paystack_enabled, opay=settings.opay_enabled,
                 dedicated_account=settings.paystack_enabled and settings.paystack_dva_enabled,
-                manual=bool(billing.manual_accounts(db)))
+                manual=bool(billing.manual_accounts(db)), crypto=settings.crypto_enabled)
+
+
+@router.get("/quote")
+def quote_price(plan: str, months: int = 1, seats: int = 1, db: Session = Depends(get_db)):
+    return quote(db, plan, months, seats)
 
 
 @router.get("/plans")
@@ -55,6 +60,12 @@ def plans(db: Session = Depends(get_db)):
     out["methods"] = methods(db)
     out["manual_accounts"] = billing.manual_accounts(db)
     return out
+
+
+def _require_verified(user):
+    if mailer.configured() and not user.email_verified:
+        raise HTTPException(403, "Confirm your email first. Check your inbox for the link, or ask for a new one "
+                                 "from your account page.")
 
 
 def _new_payment(db, user, body, provider, method=None, status="pending", prefix="SA"):
@@ -67,8 +78,22 @@ def _new_payment(db, user, body, provider, method=None, status="pending", prefix
     return pay, q
 
 
+def _crypto_checkout(db, user, body):
+    if not settings.crypto_enabled:
+        raise HTTPException(503, "Crypto payments aren't switched on yet. Choose another method.")
+    pay, q = _new_payment(db, user, body, "crypto", "crypto")
+    crypto.new_intent(db, pay, q["usd"])
+    return dict(reference=pay.reference, provider="crypto", network=pay.crypto_network,
+                label=crypto.label(pay.crypto_network), amount=pay.crypto_amount, address=pay.crypto_address,
+                expires_at=iso(pay.expires_at), usd=q["usd"], naira=q["naira"],
+                window_minutes=crypto.WINDOW_MINUTES)
+
+
 @router.post("/checkout")
 def checkout(body: CheckoutIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    _require_verified(user)
+    if body.provider == "crypto":
+        return _crypto_checkout(db, user, body)
     if body.provider == "paystack":
         if not settings.paystack_enabled:
             raise HTTPException(503, "Card/USSD payments aren't switched on yet. Use bank transfer for now.")
@@ -123,6 +148,8 @@ def verify(reference: str, user: User = Depends(current_user), db: Session = Dep
             result = billing.verify_paystack(db, pay)
         elif pay.provider == "opay":
             result = billing.verify_opay(db, pay)
+        elif pay.provider == "crypto":
+            result = crypto.verify_one(db, pay)
         db.refresh(pay)
     db.refresh(user)
     return dict(result=result, payment=payment_out(pay), user=user_out(db, user))
@@ -178,6 +205,7 @@ def get_dva(user: User = Depends(current_user), db: Session = Depends(get_db)):
 
 @router.post("/dva")
 def create_dva(user: User = Depends(current_user), db: Session = Depends(get_db)):
+    _require_verified(user)
     if not methods(db)["dedicated_account"]:
         raise HTTPException(503, "Personal account numbers aren't switched on yet.")
     if not user.phone:
@@ -208,6 +236,7 @@ def create_dva(user: User = Depends(current_user), db: Session = Depends(get_db)
 
 @router.post("/dva/intent")
 def dva_intent(body: IntentIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    _require_verified(user)
     va = db.execute(select(VirtualAccount).where(VirtualAccount.user_id == user.id)).scalar_one_or_none()
     if not va or va.status != "active":
         raise HTTPException(409, "Create your account number first.")

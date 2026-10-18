@@ -134,7 +134,7 @@ function Payments({ toast }) {
               <Field label="Months"><select className="select" value={decide.months} onChange={(e) => setDecide({ ...decide, months: e.target.value })}>{[1, 3, 6, 12].map((m) => <option key={m} value={m}>{m}</option>)}</select></Field>
             </div>
             <div className="grid-2">
-              {decide.plan === "org" ? <Field label="Member cap (leave as is for the flat plan)"><input className="input" type="number" min="1" value={decide.seats} onChange={(e) => setDecide({ ...decide, seats: e.target.value })} /></Field> : null}
+              {decide.plan === "org" ? <Field label="People on the plan (seats)"><input className="input" type="number" min="1" value={decide.seats} onChange={(e) => setDecide({ ...decide, seats: e.target.value })} /></Field> : null}
               <Field label="Amount received (₦)"><input className="input" type="number" value={decide.paid} onChange={(e) => setDecide({ ...decide, paid: e.target.value })} /></Field>
             </div>
             <Field label="Note (shown to the user if rejected)"><input className="input" value={decide.note} onChange={(e) => setDecide({ ...decide, note: e.target.value })} placeholder="e.g. Seen in UBA app 14:05" /></Field>
@@ -235,7 +235,7 @@ function Settings({ toast }) {
         <b>Prices (US $) and the naira rate</b>
         <div className="grid-2">
           <Field label="Pro per month ($)"><input className="input num" type="number" value={P.pro_monthly} onChange={(e) => setP("pro_monthly", e.target.value)} /></Field>
-          <Field label="Organization per month, flat ($)"><input className="input num" type="number" value={P.org_monthly} onChange={(e) => setP("org_monthly", e.target.value)} /></Field>
+          <Field label="Organization: per person per month ($)"><input className="input num" type="number" value={P.org_seat_monthly} onChange={(e) => setP("org_seat_monthly", e.target.value)} /></Field>
           <Field label="₦ per $1 (naira charge = dollars × this)"><input className="input num" type="number" value={P.usd_rate} onChange={(e) => setP("usd_rate", e.target.value)} /></Field>
           <Field label="3-month discount (0–0.9)"><input className="input num" type="number" step="0.01" value={P.discounts["3"]} onChange={(e) => setDisc("3", e.target.value)} /></Field>
           <Field label="12-month discount (0–0.9)"><input className="input num" type="number" step="0.01" value={P.discounts["12"]} onChange={(e) => setDisc("12", e.target.value)} /></Field>
