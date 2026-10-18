@@ -160,6 +160,18 @@ def t_watchlist(c):
               headers=H)
     check(r.json()["count"] == 1, r.text)
     check(c.get("/api/user/drawings?symbol=btcusdt").json()["items"][0]["price"] == 100.5, "drawings saved")
+    # the analysis stays on its chart until it is cleaned; each symbol and timeframe keeps its own
+    r = c.put("/api/user/analysis", json=dict(symbol="BTCUSDT", tf="1h", data=dict(symbol="BTCUSDT", tf="1h",
+              verdict=dict(action="BUY"), candles=[[1700000000]])), headers=H)
+    check(r.json()["ok"], r.text)
+    a = c.get("/api/user/analysis?symbol=btcusdt&tf=1h").json()
+    check(a["data"]["verdict"]["action"] == "BUY" and a["updated_at"], a)
+    check(c.get("/api/user/analysis?symbol=btcusdt&tf=4h").json()["data"] is None, "another timeframe is empty")
+    check(c.get("/api/user/analysis?symbol=ethusdt&tf=1h").json()["data"] is None, "another symbol is empty")
+    c.put("/api/user/analysis", json=dict(symbol="BTCUSDT", tf="1h", data=dict(verdict=dict(action="SELL"))), headers=H)
+    check(c.get("/api/user/analysis?symbol=btcusdt&tf=1h").json()["data"]["verdict"]["action"] == "SELL", "analysis replaced")
+    check(c.delete("/api/user/analysis?symbol=btcusdt&tf=1h", headers=H).json()["ok"], "clean")
+    check(c.get("/api/user/analysis?symbol=btcusdt&tf=1h").json()["data"] is None, "cleaned analysis is gone")
 
 
 def t_search(c):
@@ -558,6 +570,37 @@ def t_strategy(c):
     check(d1.status_code == 200 and any("Session" in n for n in d1.json()["notes"]), d1.text[:300])
 
 
+def t_scalp_template(c):
+    """S.C.A.L.P. (London sweep): the premium/discount condition matches its definition, the template keeps its
+    parts, and the API runs it on a live chart."""
+    import numpy as np
+    import pandas as pd
+    from app.services import strategy as stg
+    idx = pd.date_range("2026-01-05 00:00", periods=300, freq="1h", tz="UTC")
+    rng = np.random.default_rng(3)
+    close = 100 + np.cumsum(rng.normal(0, 0.5, 300))
+    df = pd.DataFrame({"open": close, "high": close + 0.4, "low": close - 0.4, "close": close, "volume": 1000.0}, index=idx)
+    ctx = stg.Context(df, "1h")
+    lg, sh = stg.condition_masks(ctx, dict(type="premium_discount", lookback=50))
+    hi = pd.Series(df["high"].to_numpy()).rolling(50).max().to_numpy()
+    lo = pd.Series(df["low"].to_numpy()).rolling(50).min().to_numpy()
+    mid = (hi + lo) / 2
+    ok = ~np.isnan(mid)
+    check(not lg[:49].any() and not sh[:49].any(), "no premium/discount before 50 candles")
+    check(np.array_equal(lg, ok & (close < mid)) and np.array_equal(sh, ok & (close > mid)),
+          "longs in the discount half, shorts in the premium half")
+    check(stg.sanitize(dict(conditions=[dict(type="premium_discount", lookback=9000)]))["conditions"][0]["lookback"] == 300,
+          "lookback is capped")
+    signup(c, "scalp@example.com", "advanced")
+    lib = c.get("/api/strategy/library").json()
+    scalp = next((x for x in lib["templates"] if x["id"] == "scalp_london"), None)
+    check(scalp is not None and [x["type"] for x in scalp["conditions"]] == ["session", "sweep", "structure", "premium_discount"],
+          scalp)
+    check(scalp["conditions"][0]["names"] == ["london"], scalp["conditions"][0])
+    d = c.post("/api/strategy/run", json=dict(symbol="BTCUSDT", tf="1h", spec=scalp, bars=1000), headers=H)
+    check(d.status_code == 200 and d.json()["live"]["total"] == 4, d.text[:300])
+
+
 def t_tracker_rules(c):
     import numpy as np
 
@@ -929,7 +972,7 @@ def main():
         run("t_password_change", t_password_change, None)
         run("t_brain_version", t_brain_version, None)
         run("t_direction_view", t_direction_view, None)
-        for t in (t_terms_and_site, t_stage2, t_practice, t_strategy, t_tracker_rules, t_track_record, t_alerts, t_push, t_replay,
+        for t in (t_terms_and_site, t_stage2, t_practice, t_strategy, t_scalp_template, t_tracker_rules, t_track_record, t_alerts, t_push, t_replay,
                   t_learning_export):
             run(t.__name__, t, client())
     bad = [r for r in RESULTS if not r[1]]

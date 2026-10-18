@@ -342,6 +342,10 @@ svg { flex-shrink: 0; }
 }
 .chart-fab { position: absolute; right: 74px; top: 10px; z-index: 7; display: flex; gap: 6px; align-items: center; }
 .detail-seg button { padding: 4px 9px; font-size: 0.78rem; }
+.chart-zoom { position: absolute; right: 76px; bottom: 34px; z-index: 7; }
+.chart-zoom button { padding: 4px 7px; min-width: 26px; font-size: 0.92rem; line-height: 1; }
+.chart-zoom .zsep { width: 1px; align-self: stretch; margin: 4px 2px; background: var(--line); }
+@media (max-width: 760px) { .chart-zoom { right: 60px; bottom: 34px; } }
 @media (max-width: 760px) { .chart-fab { right: 64px; top: 76px; } }
 
 /* right panel */

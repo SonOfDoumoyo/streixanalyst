@@ -30,6 +30,28 @@ const INDICATORS = [["ema20", "EMA 20"], ["ema50", "EMA 50"], ["ema200", "EMA 20
 const TABS = [["analysis", "Analysis", "zap"], ["replay", "Replay", "clock"], ["ai", "StreixAI", "sparkles"], ["watchlist", "Watchlist", "list"], ["news", "News", "news"], ["divergence", "Divergence", "candles"]];
 const utcLabel = (iso) => `${iso.replace("T", " ").slice(0, 16)} UTC`;
 
+// The analysis on a chart stays there until the user cleans it. The server keeps each one per symbol and timeframe;
+// this browser keeps a copy as a fallback. The copy keeps only each candle's time, which is all the overlay needs.
+const ANALYSES_KEY = "sa_analyses";
+const ANALYSES_KEEP = 12;
+const analysisKey = (sym, frame) => `${sym}|${frame}`;
+function storeAnalysisLocal(sym, frame, d) {
+  const all = localGet(ANALYSES_KEY, {}) || {};
+  all[analysisKey(sym, frame)] = { savedAt: Date.now(), res: { ...d, candles: (d.candles || []).map((c) => [c[0]]) } };
+  const kept = Object.entries(all).sort((a, b) => (b[1].savedAt || 0) - (a[1].savedAt || 0)).slice(0, ANALYSES_KEEP);
+  localSet(ANALYSES_KEY, Object.fromEntries(kept));
+}
+function readAnalysisLocal(sym, frame) {
+  const all = localGet(ANALYSES_KEY, {}) || {};
+  const e = all[analysisKey(sym, frame)];
+  return e && e.res ? e.res : null;
+}
+function dropAnalysisLocal(sym, frame) {
+  const all = localGet(ANALYSES_KEY, {}) || {};
+  delete all[analysisKey(sym, frame)];
+  localSet(ANALYSES_KEY, all);
+}
+
 function useWidth() {
   const [w, setW] = useState(typeof window === "undefined" ? 1400 : window.innerWidth);
   useEffect(() => {
@@ -129,12 +151,14 @@ export default function Terminal() {
   symbolRef.current = symbol;
   const tfRef = useRef(tf);
   tfRef.current = tf;
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
 
   useEffect(() => {
     if (!eng.current) return;
     eng.current.setTheme(theme);
     eng.current.setOptions({ style: settings.candles.style, volume: settings.chart.volume, logScale: settings.chart.logScale, rsi: settings.chart.rsi,
-      grid: settings.chart.grid, watermark: settings.chart.watermark, indicators: settings.indicators });
+      grid: settings.chart.grid, watermark: settings.chart.watermark, killzones: !!settings.chart.killzones, indicators: settings.indicators });
     eng.current.drawingDefaults = settings.drawingDefaults;
     eng.current.setScale(scale);
   }, [engReady, theme, settings.candles.style, settings.chart, settings.indicators, settings.drawingDefaults, scale]);
@@ -159,6 +183,37 @@ export default function Terminal() {
     if (eng.current) eng.current.setDrawingsVisible(drawVisible);
   }, [engReady, drawVisible]);
 
+  // ───── the saved analysis of a chart comes back when the chart loads
+  const showStoredAnalysis = useCallback((d) => {
+    setRes(d);
+    setStale(false);
+    const ov = toOverlay(d, themeRef.current);
+    setLayers(ov.layers);
+    if (eng.current) eng.current.setAnalysis(ov.items, { animate: false, pins: ov.pins });
+  }, []);
+  const restoreAnalysis = useCallback((sym, frame) => {
+    const current = () => sym === symbolRef.current && frame === tfRef.current;
+    const usable = (a) => !!(a && Array.isArray(a.candles) && a.candles.length);
+    get(`/user/analysis?${qs({ symbol: sym, tf: frame })}`).then((dd) => {
+      if (!current()) return;
+      if (dd && usable(dd.data)) {
+        showStoredAnalysis(dd.data);
+        storeAnalysisLocal(sym, frame, dd.data);
+        return;
+      }
+      // nothing on the server yet (this browser may have run it before the server saved it): show and save the copy
+      const local = readAnalysisLocal(sym, frame);
+      if (usable(local)) {
+        showStoredAnalysis(local);
+        put("/user/analysis", { symbol: sym, tf: frame, data: local }).catch(() => {});
+      }
+    }).catch(() => {
+      if (!current()) return;
+      const local = readAnalysisLocal(sym, frame);
+      if (usable(local)) showStoredAnalysis(local);
+    });
+  }, [showStoredAnalysis]);
+
   // ───── data loading
   const loadChart = useCallback(async (sym, frame, rp) => {
     const e = eng.current;
@@ -181,6 +236,7 @@ export default function Terminal() {
       // a replay analysis stays on its chart, also after a reveal reloads the candles
       const ro = replayOverlay.current;
       if (rp && ro && ro.key === `${sym}|${frame}|${rp.at}`) e.setAnalysis(ro.ov.items, { animate: false, pins: ro.ov.pins });
+      if (!rp) restoreAnalysis(sym, frame);
     } catch (err) {
       if (sym !== symbolRef.current) return;
       e.setData([], {});
@@ -302,6 +358,9 @@ export default function Terminal() {
         leverage: a.leverage ? Number(a.leverage) : null, mode: a.mode === "auto" ? null : a.mode,
         drawings: toUserDrawings(eng.current.getDrawings()),
       });
+      // saved for its chart even if the user has moved on, so it is there when they come back
+      storeAnalysisLocal(symbol, tf, d);
+      put("/user/analysis", { symbol, tf, data: d }).catch(() => {});
       if (symbolRef.current !== symbol || tfRef.current !== tf) return;
       setRes(d);
       setStale(false);
@@ -322,6 +381,19 @@ export default function Terminal() {
       setBusy(false);
     }
   }, [busy, chartState.error, settings.analysis, symbol, tf, theme, narrow, mobile, refresh, toast, showLimit]);
+
+  // Clean analysis: the only thing that removes an analysis from its chart
+  const cleanAnalysis = useCallback(() => {
+    const sym = symbolRef.current;
+    const frame = tfRef.current;
+    setRes(null);
+    setStale(false);
+    setLayers([]);
+    if (eng.current) eng.current.clearAnalysis();
+    dropAnalysisLocal(sym, frame);
+    del(`/user/analysis?${qs({ symbol: sym, tf: frame })}`).catch(() => {});
+    toast("Analysis cleaned from this chart.", "info");
+  }, [toast]);
 
   // ───── keyboard shortcuts
   useEffect(() => {
@@ -455,7 +527,7 @@ export default function Terminal() {
       ) : null}
       <div className={`panel-body ${tab === "ai" || tab === "watchlist" ? "flush" : ""}`} style={tab === "ai" ? { overflow: "hidden", display: "flex", flexDirection: "column" } : undefined}>
         {tab === "analysis" ? (
-          <AnalysisPanel res={res} busy={busy} step={step} steps={ANALYSIS_STEPS} onAnalyse={analyse} onAsk={ask} onUpgrade={() => setPaywall({ message: "Upgrade to Pro for both report styles and the model statistics." })}
+          <AnalysisPanel res={res} busy={busy} step={step} steps={ANALYSIS_STEPS} onAnalyse={analyse} onAsk={ask} onClean={cleanAnalysis} onUpgrade={() => setPaywall({ message: "Upgrade to Pro for both report styles and the model statistics." })}
             hiddenLayers={hiddenLayers} toggleLayer={toggleLayer} layers={layers} detail={detail} setDetail={setDetail} showAlt={showAlt}
             setShowAlt={(b) => { setShowAlt(b); updateSettings({ analysis: { showAlt: b } }); }} stale={stale} symbolLabel={display} tf={tf} symbol={symbol} />
         ) : null}
@@ -511,7 +583,7 @@ export default function Terminal() {
                   </button>
                 ))}
                 <hr />
-                {[["volume", "Volume"], ["rsi", "RSI pane"], ["logScale", "Log scale"], ["grid", "Grid"]].map(([k, l]) => (
+                {[["volume", "Volume"], ["rsi", "RSI pane"], ["logScale", "Log scale"], ["grid", "Grid"], ["killzones", "Killzone windows (London, New York)"]].map(([k, l]) => (
                   <button key={k} onClick={() => updateSettings({ chart: { [k]: !settings.chart[k] } })}>
                     <Icon name="check" size={14} style={{ opacity: settings.chart[k] ? 1 : 0 }} /> {l}
                   </button>
@@ -641,6 +713,16 @@ export default function Terminal() {
             {!mobile && panelHidden ? (
               <button className="btn sm glass" onClick={() => setPanelHidden(false)}><Icon name="chevronLeft" size={15} /> Panel</button>
             ) : null}
+          </div>
+          {/* size the chart like TradingView: width is the candles along time, height is the price scale */}
+          <div className="seg brand glass chart-zoom" role="group" aria-label="Chart size">
+            <button onClick={() => eng.current && eng.current.zoom(0.8)} title="Narrower candles" aria-label="Narrower candles">↔−</button>
+            <button onClick={() => eng.current && eng.current.zoom(1.25)} title="Wider candles" aria-label="Wider candles">↔+</button>
+            <i className="zsep" />
+            <button onClick={() => eng.current && eng.current.zoomY(0.8)} title="Shorter price scale (zoom out)" aria-label="Shorter price scale">↕−</button>
+            <button onClick={() => eng.current && eng.current.zoomY(1.25)} title="Taller price scale (zoom in)" aria-label="Taller price scale">↕+</button>
+            <i className="zsep" />
+            <button onClick={() => eng.current && eng.current.resetView()} title="Fit the chart" aria-label="Fit the chart"><Icon name="fit" size={14} /></button>
           </div>
           {mobile ? (
             <DrawToolbar tool={tool} setTool={setTool} magnet={magnet} setMagnet={setMagnet} visible={drawVisible} setVisible={setDrawVisible}

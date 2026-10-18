@@ -235,7 +235,7 @@ function SettingsInner() {
                     updateSettings({ chart: { skins: { [modeKey]: { bg: v } } } });
                   }} />
                 <div className="hint" style={{ marginTop: -4 }}>Saved for {modeKey === "light" ? "light" : "dark"} mode only. Each mode keeps its own background.</div>
-                {[["volume", "Show volume"], ["grid", "Show grid"], ["rsi", "RSI pane"], ["logScale", "Logarithmic price scale"], ["watermark", "Symbol watermark"]].map(([k, l]) => (
+                {[["volume", "Show volume"], ["grid", "Show grid"], ["rsi", "RSI pane"], ["logScale", "Logarithmic price scale"], ["watermark", "Symbol watermark"], ["killzones", "Killzone windows (London, New York)"]].map(([k, l]) => (
                   <label key={k} className="check"><input type="checkbox" checked={!!settings.chart[k]} onChange={(e) => updateSettings({ chart: { [k]: e.target.checked } })} /> {l}</label>
                 ))}
                 <div className="label">Interface</div>

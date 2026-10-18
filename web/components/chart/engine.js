@@ -11,11 +11,19 @@ export const TOOLS = {
   measure: { pts: 2, label: "Measure" }, text: { pts: 1, label: "Text note" },
 };
 const FIB = [0, 0.236, 0.382, 0.5, 0.618, 0.705, 0.786, 1, 1.272, 1.618];
-const FIB_COL = ["#9aa7bd", "#ff4d5e", "#ffa726", "#3ddc84", "#12d9a0", "#2fb5d6", "#ffc83d", "#9aa7bd", "#a77bff", "#ff4fa3"];
-// TradingView-style dark palette, pushed brighter: chart #000000, axis text #9a9fac, candles #12d9a0 / #ff3b5c.
+// New York clock hour (0–23) of a unix time, for the killzone windows.
+const NY_HOUR = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", hourCycle: "h23" });
+const nyHour = (sec) => Number(NY_HOUR.format(new Date(sec * 1000))) % 24;
+// Fixed clock windows in New York time, the ones fixed-time traders trade: London 02:00–05:00, New York 07:00–10:00.
+const KILLZONES = [
+  { key: "london", label: "London", from: 2, to: 5, fill: "rgba(41,98,255,0.10)", text: "rgba(120,160,255,0.95)" },
+  { key: "newyork", label: "New York", from: 7, to: 10, fill: "rgba(255,176,32,0.09)", text: "rgba(255,190,80,0.95)" },
+];
+const FIB_COL = ["#9aa7bd","#ff4d5e", "#ffa726", "#3ddc84", "#12d9a0", "#2fb5d6", "#ffc83d", "#9aa7bd", "#a77bff", "#ff4fa3"];
+// TradingView-style dark palette, pushed brighter: chart #000000, axis text #9a9fac, candles #00e6a0 / #ff2d55.
 const DEFAULT_THEME = {
   bg: "#000000", grid: "rgba(42,46,57,0.85)", text: "#9a9fac", crosshair: "#758696",
-  up: "#12d9a0", down: "#ff3b5c", wickUp: "#12d9a0", wickDown: "#ff3b5c", borderUp: "#12d9a0", borderDown: "#ff3b5c",
+  up: "#00e6a0", down: "#ff2d55", wickUp: "#00e6a0", wickDown: "#ff2d55", borderUp: "#00e6a0", borderDown: "#ff2d55",
   line: "#2962ff", axisLine: "#2a2e39", font: "IBM Plex Sans, system-ui, -apple-system, Segoe UI, sans-serif",
   label: "#2a3a5c", ma20: "#3fb8ff", ma50: "#ffb020", ma200: "#b78bff",
 };
@@ -202,6 +210,54 @@ export class ChartEngine {
   _recompute() {
     this.ha = this.opts.style === "heikin" ? heikinAshi(this.d) : null;
     this.ind = this.d.length ? computeAll(this.d, this.tfSec < 86400) : null;
+    this._kz = null;             // killzone of each candle, worked out again for the new data
+  }
+
+  // Which killzone a candle opens in: 0 none, 1 London, 2 New York. The windows are fixed clock hours in New York time.
+  _zoneOf(i) {
+    if (!this._kz || this._kz.length !== this.d.length) this._kz = new Int8Array(this.d.length).fill(-1);
+    if (this._kz[i] < 0) {
+      const h = nyHour(this.d[i].t);
+      this._kz[i] = h >= KILLZONES[0].from && h < KILLZONES[0].to ? 1 : h >= KILLZONES[1].from && h < KILLZONES[1].to ? 2 : 0;
+    }
+    return this._kz[i];
+  }
+
+  // A band behind the candles for each killzone in view, labelled at its left edge.
+  _drawKillzones(i0, i1) {
+    const ctx = this.ctx;
+    const first = Math.max(0, Math.floor(i0));
+    const last = Math.min(this.d.length - 1, Math.ceil(i1));
+    const runs = [];
+    let cur = null;
+    for (let i = first; i <= last; i++) {
+      const z = this._zoneOf(i);
+      if (z === 0) { cur = null; continue; }
+      if (cur && cur.z === z) cur.b = i;
+      else { cur = { z, a: i, b: i }; runs.push(cur); }
+    }
+    const half = this.spacing / 2;
+    const pad = 6 * this.scale;
+    ctx.save();
+    ctx.font = `600 ${Math.round(10 * this.scale)}px ${this.theme.font}`;
+    ctx.textBaseline = "top";
+    let labelEnd = -Infinity;   // where the last name printed ends, so two names never overprint
+    for (const r of runs) {
+      const K = KILLZONES[r.z - 1];
+      const x0 = Math.max(0, this.x(r.a) - half);
+      const x1 = Math.min(this.plotW, this.x(r.b) + half);
+      if (x1 <= x0) continue;
+      ctx.fillStyle = K.fill;
+      ctx.fillRect(x0, 0, x1 - x0, this.mainH);
+      const lx = x0 + pad;
+      const lw = ctx.measureText(K.label).width;
+      if (lx >= labelEnd + 4 * this.scale && lx + lw <= this.plotW) {
+        ctx.fillStyle = K.text;
+        ctx.fillText(K.label, lx, pad);
+        labelEnd = lx + lw;
+      }
+    }
+    ctx.restore();
   }
 
   setTheme(theme) {
@@ -608,9 +664,12 @@ export class ChartEngine {
     const touch = e.pointerType === "touch";
     if (this.pointers.size === 2) {
       const [a, b] = [...this.pointers.values()];
-      this.drag = { mode: "pinch", d0: Math.hypot(a.x - b.x, a.y - b.y), sp0: this.spacing, mid0: (a.x + b.x) / 2,
-        i0: this.index((a.x + b.x) / 2), right0: this.right };
+      // two fingers: apart horizontally zooms time (bar width), apart vertically zooms the price scale
+      this.drag = { mode: "pinch", dx0: Math.abs(a.x - b.x), dy0: Math.abs(a.y - b.y), sp0: this.spacing,
+        i0: this.index((a.x + b.x) / 2), right0: this.right, pmin0: this.pmin, pmax0: this.pmax };
       this.placing = null;
+      this.hover = null;          // a second finger ends the crosshair
+      this.emit("hover", null);
       return;
     }
     const area = this._area(x, y);
@@ -641,8 +700,17 @@ export class ChartEngine {
         return;
       }
     }
+    // The crosshair is up: holding and moving it moves the crosshair, and it stays up. A tap without moving hides it.
+    if (touch && this.hover && this.hover.touch) {
+      clearTimeout(this._pressT);
+      this.drag = { mode: "cross", x0: x, y0: y, moved: false, hideOnTap: true };
+      this.hover = { x: clamp(x, 0, this.plotW), y: clamp(y, 0, this.mainH), area: "plot", touch: true };
+      this._emitHover();
+      this.dirty();
+      return;
+    }
     this.drag = { mode: "pan", x0: x, y0: y, right0: this.right, pmin: this.pmin, pmax: this.pmax, moved: false, touch,
-      t0: performance.now(), far: false, wasCross: !!(this.hover && this.hover.touch) };
+      t0: performance.now(), far: false };
     // touch: holding still turns the press into a crosshair that follows the finger, like TradingView.
     // Moving more than 10px first keeps it a pan.
     if (touch) {
@@ -724,11 +792,22 @@ export class ChartEngine {
     const dr = this.drag;
     if (dr && dr.mode === "pinch" && this.pointers.size >= 2) {
       const [a, b] = [...this.pointers.values()];
-      const dist = Math.hypot(a.x - b.x, a.y - b.y);
+      const dx = Math.abs(a.x - b.x);
+      const dy = Math.abs(a.y - b.y);
       const mid = (a.x + b.x) / 2;
-      this.spacing = clamp(dr.sp0 * (dist / (dr.d0 || 1)), 5 * this.scale, 80 * this.scale);
+      if (dr.dx0 > 30) this.spacing = clamp(dr.sp0 * (dx / dr.dx0), 5 * this.scale, 80 * this.scale);
       this.right = dr.i0 + (this.plotW - mid) / this.spacing;
       this._clampRight();
+      if (dr.dy0 > 30 && dy > 0) {
+        // fingers further apart vertically show a smaller price range (zoom in)
+        this.auto = false;
+        const a0 = this._f(dr.pmin0);
+        const b0 = this._f(dr.pmax0);
+        const m = (a0 + b0) / 2;
+        const half = ((b0 - a0) / 2) * (dr.dy0 / dy);
+        this.pmin = this._fi(m - half);
+        this.pmax = this._fi(m + half);
+      }
       this.dirty();
       return;
     }
@@ -745,6 +824,7 @@ export class ChartEngine {
       return;
     }
     if (dr && dr.mode === "cross") {
+      if (Math.hypot(x - dr.x0, y - dr.y0) > 10) dr.moved = true;
       this.hover = { x: clamp(x, 0, this.plotW), y: clamp(y, 0, this.mainH), area: "plot", touch: true };
       this._emitHover();
       this.dirty();
@@ -755,11 +835,6 @@ export class ChartEngine {
       const dy = y - dr.y0;
       if (Math.abs(dx) + Math.abs(dy) > 3) dr.moved = true;
       if (Math.hypot(dx, dy) > 10) dr.far = true;
-      if (dr.mode === "pan" && dr.far && dr.wasCross && this.hover && this.hover.touch) {
-        // dragging the chart moves on, so the crosshair from the earlier press goes away
-        this.hover = null;
-        this.emit("hover", null);
-      }
       if (dr.mode === "pan") {
         this.right = dr.right0 - dx / this.spacing;
         this._clampRight();
@@ -863,7 +938,12 @@ export class ChartEngine {
     this.drag = null;
     if (!dr) return;
     if (dr.mode === "cross") {
-      // a long press leaves the crosshair up after the finger lifts; the next tap clears it
+      // A press that starts with the crosshair up and does not move is a tap, and it hides the crosshair. A long
+      // press, or a hold that moves, leaves it up. A cancelled touch (pointercancel) never hides it.
+      if (dr.hideOnTap && !dr.moved && e.type !== "pointercancel") {
+        this.hover = null;
+        this.emit("hover", null);
+      }
       this.dirty();
       return;
     }
@@ -879,18 +959,10 @@ export class ChartEngine {
       if (!dr.moved) {
         if (this.sel) this.select(null);
         if (dr.touch) {
-          // tap = show crosshair there; double tap = reset view
+          // a tap does nothing else; double tap resets the view. The crosshair comes from a long press.
           const now = performance.now();
           if (now - this._lastTap < 320) this.resetView();
           this._lastTap = now;
-          if (dr.wasCross) {
-            // the tap that follows a long press clears the crosshair
-            this.hover = null;
-            this.emit("hover", null);
-          } else {
-            this.hover = { x, y, area: "plot", touch: true };
-            this._emitHover();
-          }
         }
       }
       this.dirty();
@@ -1010,6 +1082,22 @@ export class ChartEngine {
     this.right = i0 + (this.plotW * 0.2) / this.spacing;
     this._clampRight();
     this.dirty();
+    this.emit("view", this.viewState());
+  }
+
+  // Scale the price axis around its middle. Same sense as zoom(): f > 1 zooms in (a narrower price range).
+  zoomY(f) {
+    if (!this.d.length) return;
+    if (this.auto) this.autoscale();
+    this.auto = false;
+    const a = this._f(this.pmin);
+    const b = this._f(this.pmax);
+    const mid = (a + b) / 2;
+    const half = (b - a) / 2 / f;
+    this.pmin = this._fi(mid - half);
+    this.pmax = this._fi(mid + half);
+    this.dirty();
+    this.emit("view", this.viewState());
   }
 
   _clampRight() {
@@ -1184,6 +1272,7 @@ export class ChartEngine {
     ctx.beginPath();
     ctx.rect(0, 0, this.plotW, this.mainH);
     ctx.clip();
+    if (this.opts.killzones && this.tfSec <= 4 * 3600) this._drawKillzones(i0, i1);
     if (this.ana) this._drawAnalysis("below");
     if (this.opts.volume) this._drawVolume(i0, i1);
     this._drawSeries(i0, i1);
@@ -1258,14 +1347,17 @@ export class ChartEngine {
     if (mx <= 0) return;
     const h = this.mainH * 0.16;
     const base = this.mainH;
-    const w = candleWidth(this.spacing);
-    const bb = Math.round(base);
+    // whole device pixels, like the candles, so the volume bars stay sharp too
+    const D = this.dpr || 1;
+    const wD = Math.max(1, Math.round(candleWidth(this.spacing) * D));
+    const baseD = Math.round(base * D);
     for (let i = i0; i <= i1; i++) {
       const k = src[i];
       if (!k) continue;
-      const vh = Math.max(1, Math.round((k.v / mx) * h));
+      const vhD = Math.max(1, Math.round((k.v / mx) * h * D));
       ctx.fillStyle = hexA(k.c >= k.o ? this.theme.up : this.theme.down, 0.42);
-      ctx.fillRect(Math.round(this.x(i)) - Math.floor(w / 2), bb - vh, w, vh);
+      const cxD = Math.round(this.x(i) * D);
+      ctx.fillRect((cxD - Math.floor(wD / 2)) / D, (baseD - vhD) / D, wD / D, vhD / D);
     }
   }
 
@@ -1300,56 +1392,59 @@ export class ChartEngine {
       }
       return;
     }
-    const bw = candleWidth(this.spacing);
-    // Every edge lands on a whole device pixel (coordinates are rounded), so bodies and wicks are crisp, not blurred.
-    const tick = this.spacing >= 7 ? 3 : 2;
+    // Candles are drawn in whole DEVICE pixels. Every edge is rounded to the screen's own pixel grid, so no body or
+    // wick straddles two pixels (that straddling is the blur). This holds at any density, including fractional ones.
+    const D = this.dpr || 1;
+    const dev = (v) => Math.round(v * D);
+    const bwCss = candleWidth(this.spacing);
+    const bwD = Math.max(1, dev(bwCss));
+    const tickD = Math.max(1, dev(this.spacing >= 7 ? 3 : 2));
+    const wickD = Math.max(1, dev(1));
+    // a rectangle given in device pixels (the context is scaled by D, so divide back to CSS units)
+    const rect = (x, y, w, h) => ctx.fillRect(x / D, y / D, w / D, h / D);
     for (let i = i0; i <= i1; i++) {
       const k = src[i];
       if (!k) continue;
       const up = k.c >= k.o;
-      const cx = Math.round(this.x(i));
-      const left = cx - Math.floor(bw / 2);
-      const yo = Math.round(this.y(k.o));
-      const yc = Math.round(this.y(k.c));
-      const yh = Math.round(this.y(k.h));
-      const yl = Math.round(this.y(k.l));
+      const cxD = dev(this.x(i));
+      const leftD = cxD - Math.floor(bwD / 2);
+      const yoD = dev(this.y(k.o));
+      const ycD = dev(this.y(k.c));
+      const yhD = dev(this.y(k.h));
+      const ylD = dev(this.y(k.l));
       if (style === "bars") {
         // OHLC bars: thick ticks, with arms as wide as a candle body
-        const off = tick % 2 ? 0.5 : 0;
-        const ox = cx + off;
-        ctx.strokeStyle = up ? th.up : th.down;
-        ctx.lineWidth = tick;
-        ctx.lineCap = "butt";
-        ctx.beginPath();
-        ctx.moveTo(ox, yh);
-        ctx.lineTo(ox, yl);
-        ctx.moveTo(left, yo + off);
-        ctx.lineTo(ox, yo + off);
-        ctx.moveTo(ox, yc + off);
-        ctx.lineTo(left + bw, yc + off);
-        ctx.stroke();
+        ctx.fillStyle = up ? th.up : th.down;
+        rect(cxD - Math.floor(tickD / 2), yhD, tickD, Math.max(tickD, ylD - yhD));
+        rect(leftD, yoD - Math.floor(tickD / 2), cxD - leftD, tickD);
+        rect(cxD, ycD - Math.floor(tickD / 2), leftD + bwD - cxD, tickD);
         continue;
       }
-      // wick: one pixel wide, down the middle of the body
+      // wick: a one-pixel column down the middle of the body
       ctx.fillStyle = up ? th.wickUp : th.wickDown;
-      ctx.fillRect(left + Math.floor(bw / 2), yh, 1, Math.max(1, yl - yh));
-      const top = Math.min(yo, yc);
-      const hgt = Math.max(1, Math.abs(yc - yo));
-      if (style === "hollow" && up && bw >= 5) {
-        // hollow: a 2px outline with the background inside
+      rect(cxD - Math.floor(wickD / 2), yhD, wickD, Math.max(wickD, ylD - yhD));
+      const topD = Math.min(yoD, ycD);
+      const hD = Math.max(1, Math.abs(ycD - yoD));
+      const body = up ? th.up : th.down;
+      if (style === "hollow" && up && bwCss >= 5) {
+        // hollow: a 2px outline in the border colour, background inside
+        const ringD = dev(2);
+        ctx.fillStyle = th.borderUp || th.up;
+        rect(leftD, topD, bwD, hD);
         ctx.fillStyle = th.bg;
-        ctx.fillRect(left, top, bw, hgt);
-        ctx.strokeStyle = th.borderUp || th.up;
-        ctx.lineWidth = 2;
-        ctx.strokeRect(left + 1, top + 1, bw - 2, Math.max(1, hgt - 2));
+        rect(leftD + ringD, topD + ringD, bwD - 2 * ringD, Math.max(1, hD - 2 * ringD));
       } else {
-        ctx.fillStyle = up ? th.up : th.down;
-        ctx.fillRect(left, top, bw, hgt);
+        ctx.fillStyle = body;
+        rect(leftD, topD, bwD, hD);
         const border = up ? th.borderUp : th.borderDown;
-        if (bw >= 5 && border && border !== (up ? th.up : th.down)) {
-          ctx.strokeStyle = border;
-          ctx.lineWidth = 1;
-          ctx.strokeRect(left + 0.5, top + 0.5, bw - 1, Math.max(1, hgt - 1));
+        if (bwCss >= 5 && border && border !== body) {
+          // a 1px frame in the border colour
+          const edgeD = Math.max(1, dev(1));
+          ctx.fillStyle = border;
+          rect(leftD, topD, bwD, edgeD);
+          rect(leftD, topD + hD - edgeD, bwD, edgeD);
+          rect(leftD, topD, edgeD, hD);
+          rect(leftD + bwD - edgeD, topD, edgeD, hD);
         }
       }
     }
@@ -1398,10 +1493,11 @@ export class ChartEngine {
   _drawLastLine() {
     const k = this.d[this.d.length - 1];
     const ctx = this.ctx;
-    const yy = Math.round(this.y(k.c)) + 0.5;
+    const D = this.dpr || 1;
+    const yy = (Math.round(this.y(k.c) * D) + 0.5) / D;   // centred on a device pixel
     ctx.strokeStyle = hexA(k.c >= k.o ? this.theme.up : this.theme.down, 0.9);
     ctx.setLineDash([2, 3]);
-    ctx.lineWidth = 1;
+    ctx.lineWidth = 1 / D;
     ctx.beginPath();
     ctx.moveTo(0, yy);
     ctx.lineTo(this.plotW, yy);

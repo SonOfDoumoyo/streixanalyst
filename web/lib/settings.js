@@ -22,6 +22,7 @@ export const DEFAULT_SETTINGS = {
     logScale: false,
     rsi: false,
     watermark: true,
+    killzones: false,          // shade the London and New York killzones (fixed New York clock windows)
   },
   indicators: { ema20: false, ema50: true, ema200: true, bb: false, vwap: false },
   analysis: { detail: 1, animate: true, account: 1000, risk_pct: 1, leverage: "", mode: "auto", showAlt: false, directionView: "range" },

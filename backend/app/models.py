@@ -167,6 +167,18 @@ class SavedDrawing(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
 
 
+class SavedAnalysis(Base):
+    """The last analysis run on one chart (symbol and timeframe). It stays on that chart until the user cleans it."""
+    __tablename__ = "saved_analyses"
+    __table_args__ = (UniqueConstraint("user_id", "symbol", "tf"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str] = mapped_column(String(64))
+    tf: Mapped[str] = mapped_column(String(16))
+    data: Mapped[str] = mapped_column(Text, default="{}")
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
 class WatchItem(Base):
     __tablename__ = "watchlist"
     __table_args__ = (UniqueConstraint("user_id", "symbol"),)

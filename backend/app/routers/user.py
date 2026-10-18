@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import current_user
-from ..models import Organization, SavedDrawing, User, WatchItem, iso, jdump, jload
+from ..models import Organization, SavedAnalysis, SavedDrawing, User, WatchItem, iso, jdump, jload
 from ..plans import limits_of, tier_of
 from ..security import random_code
 from .auth import join_org
@@ -50,6 +50,56 @@ def put_drawings(body: DrawingsIn, user: User = Depends(current_user), db: Sessi
         row.data = blob
     db.commit()
     return dict(ok=True, count=len(body.items))
+
+
+class AnalysisIn(BaseModel):
+    symbol: str
+    tf: str
+    data: dict = Field(default_factory=dict)
+
+
+def _tf(s):
+    s = (s or "").strip()
+    if not s or len(s) > 16:
+        raise HTTPException(422, "Invalid timeframe.")
+    return s
+
+
+def _analysis_row(db, user, sym, tf):
+    return db.execute(select(SavedAnalysis).where(SavedAnalysis.user_id == user.id, SavedAnalysis.symbol == sym,
+                                                  SavedAnalysis.tf == tf)).scalar_one_or_none()
+
+
+@router.get("/analysis")
+def get_analysis(symbol: str, tf: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    sym, frame = _sym(symbol), _tf(tf)
+    row = _analysis_row(db, user, sym, frame)
+    return dict(symbol=sym, tf=frame, data=jload(row.data, None) if row else None,
+                updated_at=iso(row.updated_at) if row else None)
+
+
+@router.put("/analysis")
+def put_analysis(body: AnalysisIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    sym, frame = _sym(body.symbol), _tf(body.tf)
+    blob = jdump(body.data)
+    if len(blob) > 1_500_000:
+        raise HTTPException(413, "This analysis is too large to save.")
+    row = _analysis_row(db, user, sym, frame)
+    if row is None:
+        db.add(SavedAnalysis(user_id=user.id, symbol=sym, tf=frame, data=blob))
+    else:
+        row.data = blob
+    db.commit()
+    return dict(ok=True)
+
+
+@router.delete("/analysis")
+def delete_analysis(symbol: str, tf: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+    row = _analysis_row(db, user, _sym(symbol), _tf(tf))
+    if row is not None:
+        db.delete(row)
+        db.commit()
+    return dict(ok=True)
 
 
 @router.get("/watchlist")

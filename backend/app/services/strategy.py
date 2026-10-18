@@ -45,6 +45,8 @@ CONDITIONS = {
     "volume": dict(label="Volume spike", params=dict(mult=1.5, period=20), desc="Volume above {mult}× its {period}-candle average"),
     "bb_touch": dict(label="Bollinger band touch", params=dict(period=20, mult=2.0),
                      desc="Low touches the lower band (shorts: high touches the upper band)"),
+    "premium_discount": dict(label="Premium / discount", params=dict(lookback=50),
+                             desc="Longs only in the discount half of the last {lookback} candles' range (shorts: the premium half)"),
 }
 STOPS = dict(atr=dict(mult=1.5), swing=dict(lookback=10, buffer_atr=0.2), percent=dict(value=1.0))
 TARGETS = dict(rr=dict(value=2.0), atr=dict(mult=3.0), percent=dict(value=2.0))
@@ -78,6 +80,15 @@ TEMPLATES = [
          description="Higher timeframe trend agrees and price breaks structure the same way. Stop at the swing, 2R.",
          conditions=[dict(type="htf_trend"), dict(type="structure", kind="BOS", within=2)],
          stop=dict(type="swing", lookback=10, buffer_atr=0.25), target=dict(type="rr", value=2.0), max_hold=60),
+    # S.C.A.L.P.: a fixed clock window (London killzone), a liquidity sweep, a structure break the other way,
+    # and entry only from the discount (longs) or premium (shorts) half of the recent range.
+    dict(id="scalp_london", name="S.C.A.L.P. · London sweep", direction="both",
+         description="In the London killzone (02:00–05:00 New York): a liquidity sweep, then a structure break the other way, "
+                     "taken only from the discount half (longs) or premium half (shorts) of the last 50 candles. "
+                     "Stop 1 ATR, target 3R, close after 24 candles.",
+         conditions=[dict(type="session", names=["london"]), dict(type="sweep", within=6),
+                     dict(type="structure", kind="any", within=3), dict(type="premium_discount", lookback=50)],
+         stop=dict(type="atr", mult=1.0), target=dict(type="rr", value=3.0), max_hold=24),
 ]
 
 
@@ -434,6 +445,14 @@ def condition_masks(ctx, c):
         sd = s.rolling(c["period"]).std(ddof=0)
         up, lo = (m + c["mult"] * sd).to_numpy(), (m - c["mult"] * sd).to_numpy()
         return (L <= np.nan_to_num(lo, nan=-np.inf)), (H >= np.nan_to_num(up, nan=np.inf))
+    if t == "premium_discount":
+        # the middle of the range of the last `lookback` candles (this candle included, known at its close)
+        lb = c["lookback"]
+        hh = pd.Series(H).rolling(lb).max().to_numpy()
+        ll = pd.Series(L).rolling(lb).min().to_numpy()
+        mid = (hh + ll) / 2
+        ok = ~np.isnan(mid)
+        return ok & (C < mid), ok & (C > mid)
     raise StrategyError(f"Unknown condition {t}")
 
 

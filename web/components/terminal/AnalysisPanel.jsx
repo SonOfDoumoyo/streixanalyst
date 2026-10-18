@@ -203,7 +203,7 @@ function Report({ res, can, onUpgrade }) {
   );
 }
 
-export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk, onUpgrade, hiddenLayers, toggleLayer, layers, detail, setDetail, showAlt, setShowAlt, stale, symbolLabel, tf, symbol }) {
+export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk, onClean, onUpgrade, hiddenLayers, toggleLayer, layers, detail, setDetail, showAlt, setShowAlt, stale, symbolLabel, tf, symbol }) {
   const { settings, updateSettings, can, user } = useAuth();
   if (busy && !res) {
     return (
@@ -277,6 +277,9 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
             <Icon name="sparkles" size={15} /> Ask StreixAI why
           </button>
           <button className="btn sm" onClick={onAnalyse} disabled={busy}><Icon name="refresh" size={15} /> {busy ? "Analysing…" : "Refresh"}</button>
+          {onClean ? (
+            <button className="btn sm" onClick={onClean} title="Remove this analysis from the chart"><Icon name="trash" size={15} /> Clean analysis</button>
+          ) : null}
         </div>
       </div>
 
