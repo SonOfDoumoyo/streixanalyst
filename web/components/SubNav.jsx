@@ -12,6 +12,7 @@ import { initials } from "@/lib/format";
 
 export const APP_LINKS = [
   ["/terminal", "Terminal", "candles"],
+  ["/ai", "StreixAI", "sparkles"],
   ["/practice", "Draw & score", "target"],
   ["/strategy", "Strategy lab", "sliders"],
   ["/track-record", "Track record", "shield"],

@@ -7,7 +7,12 @@ import { useAuth } from "@/components/Providers";
 import { ApiError, del, get, stream } from "@/lib/api";
 import { greeting, initials } from "@/lib/format";
 
-export default function AIChat({ symbol, tf, analysisId, pending, clearPending, onLimit, compact = false }) {
+/**
+ * StreixAI chat. Two layouts share one engine:
+ * - panel (default): the compact chat used beside the chart and on the practice page.
+ * - page: full-screen, ChatGPT-style: conversation sidebar, centred messages, floating composer.
+ */
+export default function AIChat({ symbol, tf, analysisId, pending, clearPending, onLimit, compact = false, page = false }) {
   const { user, refresh } = useAuth();
   const [msgs, setMsgs] = useState([]);
   const [thread, setThread] = useState(null);
@@ -16,6 +21,7 @@ export default function AIChat({ symbol, tf, analysisId, pending, clearPending, 
   const [sugs, setSugs] = useState([]);
   const [threads, setThreads] = useState(null);
   const [provider, setProvider] = useState(null);
+  const [side, setSide] = useState(false);
   const box = useRef(null);
   const ta = useRef(null);
   const ctl = useRef(null);
@@ -27,6 +33,12 @@ export default function AIChat({ symbol, tf, analysisId, pending, clearPending, 
   useEffect(() => {
     if (box.current) box.current.scrollTop = box.current.scrollHeight;
   }, [msgs]);
+
+  // the full page always shows the conversation list; it refreshes whenever an answer finishes
+  const loadList = useCallback(() => {
+    get("/ai/threads").then((d) => setThreads(d.threads || [])).catch(() => setThreads((t) => t || []));
+  }, []);
+  useEffect(() => { if (page && !busy) loadList(); }, [page, busy, loadList]);
 
   const send = useCallback(async (text) => {
     const q = (text || "").trim();
@@ -73,11 +85,13 @@ export default function AIChat({ symbol, tf, analysisId, pending, clearPending, 
     }
   }, [pending, send, clearPending]);
 
+  // in the panel the list closes after a choice; on the full page it stays open
+  const closeList = () => { if (!page) setThreads(null); };
   const newChat = () => {
     if (ctl.current) ctl.current.abort();
     setMsgs([]);
     setThread(null);
-    setThreads(null);
+    closeList();
   };
   const openThreads = async () => {
     if (threads) return setThreads(null);
@@ -90,7 +104,8 @@ export default function AIChat({ symbol, tf, analysisId, pending, clearPending, 
     const d = await get(`/ai/threads/${id}`);
     setMsgs(d.messages.map((m) => ({ role: m.role, content: m.content })));
     setThread(id);
-    setThreads(null);
+    closeList();
+    setSide(false);
   };
   const removeThread = async (id) => {
     await del(`/ai/threads/${id}`);
@@ -100,11 +115,99 @@ export default function AIChat({ symbol, tf, analysisId, pending, clearPending, 
   const usage = user && user.entitlements ? user.entitlements : null;
   const left = usage && usage.limits.ai !== null ? Math.max(0, usage.limits.ai - (usage.usage.ai || 0)) : null;
 
+  const inner = (
+    <>
+      {!msgs.length ? (
+        <div className="stack" style={{ gap: 14 }}>
+          <div className="msg ai">
+            <span className="av"><Mark size={20} /></span>
+            <div className="bubble">
+              <b>{greeting(user && user.first_name)}!</b> I'm StreixAI. I can explain any trading idea in plain words, walk you through this chart's analysis, check your risk and leverage, or help you build a strategy.
+              {provider === "offline" ? <div className="hint" style={{ marginTop: 6 }}>Running on my built-in trading notes.</div> : null}
+            </div>
+          </div>
+          {sugs.length ? (
+            <div className="chips" style={{ paddingLeft: compact ? 0 : 40 }}>
+              {sugs.map((s) => <button key={s} className="chip" onClick={() => send(s)}>{s}</button>)}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+      {msgs.map((m, i) => (
+        <div key={i} className={`msg ${m.role === "user" ? "me" : "ai"}`}>
+          <span className="av" style={m.role === "user" ? { background: "linear-gradient(135deg,#2962ff,#1e4fd6)", color: "#fff", fontSize: "0.72rem", fontWeight: 800 } : undefined}>
+            {m.role === "user" ? initials(user && user.name) : <Mark size={20} />}
+          </span>
+          <div className="bubble" style={m.error ? { borderColor: "rgba(242,54,69,.4)" } : undefined}>
+            {m.role === "user" ? m.content : m.content ? <Markdown text={m.content} /> : <span className="typing"><i /><i /><i /></span>}
+          </div>
+        </div>
+      ))}
+    </>
+  );
+
+  const field = (
+    <>
+      <textarea ref={ta} value={input} placeholder={`Ask StreixAI${symbol ? ` about ${symbol}` : ""}…`} aria-label="Message StreixAI"
+        onChange={(e) => {
+          setInput(e.target.value);
+          e.target.style.height = "44px";
+          e.target.style.height = `${Math.min(140, e.target.scrollHeight)}px`;
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            send(input);
+          }
+        }} />
+      {busy ? (
+        <button type="button" className="btn" style={{ height: 44 }} onClick={() => ctl.current && ctl.current.abort()} aria-label="Stop"><Icon name="pause" size={16} /></button>
+      ) : (
+        <button type="submit" className="btn primary" style={{ height: 44, width: 48, padding: 0 }} disabled={!input.trim()} aria-label="Send"><Icon name="send" size={18} /></button>
+      )}
+    </>
+  );
+  const onSubmit = (e) => { e.preventDefault(); send(input); };
+
+  if (page) {
+    return (
+      <div className={`ai-grid${side ? " side-open" : ""}`}>
+        <aside className="ai-side">
+          <button className="btn ai-new" onClick={() => { newChat(); setSide(false); }}><Icon name="plus" size={16} /> New chat</button>
+          <div className="ai-list">
+            {(threads || []).map((t) => (
+              <div key={t.thread_id} className={`ai-thread${t.thread_id === thread ? " on" : ""}`} onClick={() => loadThread(t.thread_id)}>
+                <span className="ai-thread-t">{t.title}</span>
+                <button className="icon-btn ai-del" onClick={(e) => { e.stopPropagation(); removeThread(t.thread_id); }} aria-label="Delete conversation">
+                  <Icon name="trash" size={14} />
+                </button>
+              </div>
+            ))}
+            {threads && !threads.length ? <div className="faint ai-empty">No conversations yet.</div> : null}
+          </div>
+        </aside>
+        <section className="ai-main">
+          <div className="ai-top">
+            <button className="icon-btn ai-menu" onClick={() => setSide(!side)} aria-label="Conversations"><Icon name="menu" /></button>
+            <div className="grow" style={{ fontWeight: 700 }}>StreixAI</div>
+            {left !== null ? <span className="badge" title="Messages left today">{left} left</span> : null}
+          </div>
+          <div className="chat-msgs" ref={box}>
+            <div className="ai-col">{inner}</div>
+          </div>
+          <div className="ai-dock">
+            <form className="chat-input ai-composer" onSubmit={onSubmit}>{field}</form>
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   return (
     <div className="chat">
       <div className="row" style={{ padding: "8px 10px", borderBottom: "1px solid var(--line)", gap: 6 }}>
         <div className="row grow" style={{ gap: 8, minWidth: 0 }}>
-          <span style={{ width: 26, height: 26, borderRadius: 8, display: "grid", placeItems: "center", background: "linear-gradient(135deg,#1b3a72,#0a1d42)", border: "1px solid rgba(85,174,255,.35)" }}>
+          <span style={{ width: 26, height: 26, borderRadius: 8, display: "grid", placeItems: "center", background: "var(--bg-4)", border: "1px solid var(--line-2)" }}>
             <Mark size={18} />
           </span>
           <div style={{ minWidth: 0 }}>
@@ -130,53 +233,8 @@ export default function AIChat({ symbol, tf, analysisId, pending, clearPending, 
           )) : <div className="empty">No conversations yet.</div>}
         </div>
       ) : null}
-      <div className="chat-msgs" ref={box}>
-        {!msgs.length ? (
-          <div className="stack" style={{ gap: 14 }}>
-            <div className="msg ai">
-              <span className="av"><Mark size={20} /></span>
-              <div className="bubble">
-                <b>{greeting(user && user.first_name)}!</b> I'm StreixAI. I can explain any trading idea in plain words, walk you through this chart's analysis, check your risk and leverage, or help you build a strategy.
-                {provider === "offline" ? <div className="hint" style={{ marginTop: 6 }}>Running on my built-in trading notes.</div> : null}
-              </div>
-            </div>
-            {sugs.length ? (
-              <div className="chips" style={{ paddingLeft: compact ? 0 : 40 }}>
-                {sugs.map((s) => <button key={s} className="chip" onClick={() => send(s)}>{s}</button>)}
-              </div>
-            ) : null}
-          </div>
-        ) : null}
-        {msgs.map((m, i) => (
-          <div key={i} className={`msg ${m.role === "user" ? "me" : "ai"}`}>
-            <span className="av" style={m.role === "user" ? { background: "linear-gradient(135deg,#d97757,#b65d3f)", color: "#fff", fontSize: "0.72rem", fontWeight: 800 } : undefined}>
-              {m.role === "user" ? initials(user && user.name) : <Mark size={20} />}
-            </span>
-            <div className="bubble" style={m.error ? { borderColor: "rgba(239,83,80,.4)" } : undefined}>
-              {m.role === "user" ? m.content : m.content ? <Markdown text={m.content} /> : <span className="typing"><i /><i /><i /></span>}
-            </div>
-          </div>
-        ))}
-      </div>
-      <form className="chat-input" onSubmit={(e) => { e.preventDefault(); send(input); }}>
-        <textarea ref={ta} value={input} placeholder={`Ask StreixAI${symbol ? ` about ${symbol}` : ""}…`} aria-label="Message StreixAI"
-          onChange={(e) => {
-            setInput(e.target.value);
-            e.target.style.height = "44px";
-            e.target.style.height = `${Math.min(140, e.target.scrollHeight)}px`;
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              send(input);
-            }
-          }} />
-        {busy ? (
-          <button type="button" className="btn" style={{ height: 44 }} onClick={() => ctl.current && ctl.current.abort()} aria-label="Stop"><Icon name="pause" size={16} /></button>
-        ) : (
-          <button type="submit" className="btn primary" style={{ height: 44, width: 48, padding: 0 }} disabled={!input.trim()} aria-label="Send"><Icon name="send" size={18} /></button>
-        )}
-      </form>
+      <div className="chat-msgs" ref={box}>{inner}</div>
+      <form className="chat-input" onSubmit={onSubmit}>{field}</form>
     </div>
   );
 }

@@ -4,19 +4,19 @@ export const DEFAULT_SETTINGS = {
   theme: "dark",
   candles: {
     style: "candles", // candles | hollow | bars | line | area | heikin
-    up: "#26a69a",
-    down: "#ef5350",
-    wickUp: "#26a69a",
-    wickDown: "#ef5350",
-    borderUp: "#26a69a",
-    borderDown: "#ef5350",
+    up: "#089981",
+    down: "#f23645",
+    wickUp: "#089981",
+    wickDown: "#f23645",
+    borderUp: "#089981",
+    borderDown: "#f23645",
   },
   chart: {
-    background: "#0a0a0a",
-    grid: true,
-    gridColor: "rgba(255,255,255,0.07)",
-    crosshair: "rgba(200,196,186,0.55)",
-    textColor: "#9a968c",
+    background: "#131722",
+    grid: false,
+    gridColor: "rgba(42,46,57,0.85)",
+    crosshair: "#758696",
+    textColor: "#787b86",
     volume: true,
     logScale: false,
     rsi: false,
@@ -32,6 +32,7 @@ export const DEFAULT_SETTINGS = {
 };
 
 export const CANDLE_PRESETS = [
+  { name: "TradingView", up: "#089981", down: "#f23645" },
   { name: "Classic", up: "#26a69a", down: "#ef5350" },
   { name: "Streix", up: "#2fd3a6", down: "#ff5d7a" },
   { name: "Ocean", up: "#3b90fa", down: "#f5a524" },
@@ -41,6 +42,7 @@ export const CANDLE_PRESETS = [
 ];
 
 export const CHART_BACKGROUNDS = [
+  { name: "TradingView", bg: "#131722", grid: "rgba(42,46,57,0.85)", text: "#787b86" },
   { name: "Black", bg: "#0a0a0a", grid: "rgba(255,255,255,0.06)", text: "#9a968c" },
   { name: "Carbon", bg: "#0e1013", grid: "rgba(255,255,255,0.05)", text: "#9aa3ad" },
   { name: "Charcoal", bg: "#171717", grid: "rgba(255,255,255,0.07)", text: "#a8a49a" },

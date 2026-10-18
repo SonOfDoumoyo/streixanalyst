@@ -39,7 +39,27 @@ services:
         sync: false
       - key: VAPID_SUBJECT
         sync: false
+      # Card + bank transfer (Paystack). Webhook: <FRONTEND_URL>/api/billing/paystack/webhook
       - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: PAYSTACK_PUBLIC_KEY
+        sync: false
+      # Set to 1 once Paystack approves dedicated virtual accounts (automatic bank transfer).
+      - key: PAYSTACK_DVA_ENABLED
+        sync: false
+      - key: PAYSTACK_DVA_BANK
+        sync: false
+      # OPay Checkout (direct OPay payment).
+      - key: OPAY_MERCHANT_ID
+        sync: false
+      - key: OPAY_PUBLIC_KEY
+        sync: false
+      - key: OPAY_SECRET_KEY
+        sync: false
+      - key: OPAY_BASE_URL
+        sync: false
+      # Crypto: your wallet address shown at checkout.
+      - key: CRYPTO_WALLET_ADDRESS
         sync: false
       - key: MANUAL_ACCOUNTS
         sync: false

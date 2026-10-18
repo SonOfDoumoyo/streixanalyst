@@ -105,7 +105,7 @@ function Checkout({ open, onClose, plan, months, plans, user, onDone, toast }) {
           {methods.paystack ? (
             <button className="card row" style={{ textAlign: "left", cursor: "pointer", padding: 14 }} onClick={() => setMethod("paystack")}>
               <Icon name="card" size={24} style={{ color: "var(--brand-2)" }} />
-              <div className="grow"><b>Card, bank or USSD</b><div className="faint" style={{ fontSize: "0.85rem" }}>Visa, Mastercard, Verve, bank app, *USSD# — secured by Paystack</div></div>
+              <div className="grow"><b>Debit or credit card</b><div className="faint" style={{ fontSize: "0.85rem" }}>Visa, Mastercard, Verve — secured by Paystack. Confirmed automatically.</div></div>
               <Icon name="chevronRight" size={18} />
             </button>
           ) : null}
@@ -119,18 +119,11 @@ function Checkout({ open, onClose, plan, months, plans, user, onDone, toast }) {
           {methods.dedicated_account ? (
             <button className="card row" style={{ textAlign: "left", cursor: "pointer", padding: 14 }} onClick={() => setMethod("dva")}>
               <Icon name="bank" size={24} style={{ color: "#ffc766" }} />
-              <div className="grow"><b>My own account number</b><div className="faint" style={{ fontSize: "0.85rem" }}>Get a personal account number — transfer from any bank, confirmed automatically</div></div>
+              <div className="grow"><b>Bank transfer</b><div className="faint" style={{ fontSize: "0.85rem" }}>Transfer from any bank app to your personal account number. Confirmed automatically.</div></div>
               <Icon name="chevronRight" size={18} />
             </button>
           ) : null}
-          {methods.manual ? (
-            <button className="card row" style={{ textAlign: "left", cursor: "pointer", padding: 14 }} onClick={() => setMethod("manual")}>
-              <Icon name="upload" size={24} style={{ color: "#c4b3ff" }} />
-              <div className="grow"><b>Transfer to our OPay or UBA account</b><div className="faint" style={{ fontSize: "0.85rem" }}>Send the money, upload your receipt, we confirm it (usually within a few hours)</div></div>
-              <Icon name="chevronRight" size={18} />
-            </button>
-          ) : null}
-          {!methods.paystack && !methods.opay && !methods.manual && !methods.dedicated_account ? <div className="hint">Payments aren't set up on this server yet.</div> : null}
+          {!methods.paystack && !methods.opay && !methods.dedicated_account ? <div className="hint">Payments aren't set up on this server yet.</div> : null}
         </div>
       ) : null}
       {method === "paystack" ? (

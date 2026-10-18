@@ -12,12 +12,14 @@ export const TOOLS = {
 };
 const FIB = [0, 0.236, 0.382, 0.5, 0.618, 0.705, 0.786, 1, 1.272, 1.618];
 const FIB_COL = ["#9aa7bd", "#ef5350", "#ff9800", "#4caf50", "#26a69a", "#2fb5d6", "#d97757", "#9aa7bd", "#9b7bff", "#e91e63"];
+// TradingView dark palette: chart #131722, axis text #787b86, candles #089981 / #f23645.
 const DEFAULT_THEME = {
-  bg: "#060d1d", grid: "rgba(255,255,255,0.07)", text: "#8fa1c4", crosshair: "rgba(169,184,214,0.55)",
-  up: "#26a69a", down: "#ef5350", wickUp: "#26a69a", wickDown: "#ef5350", borderUp: "#26a69a", borderDown: "#ef5350",
-  line: "#e8a287", axisLine: "rgba(255,255,255,0.14)", font: "Inter, system-ui, -apple-system, Segoe UI, sans-serif",
+  bg: "#131722", grid: "rgba(42,46,57,0.85)", text: "#787b86", crosshair: "#758696",
+  up: "#089981", down: "#f23645", wickUp: "#089981", wickDown: "#f23645", borderUp: "#089981", borderDown: "#f23645",
+  line: "#2962ff", axisLine: "#2a2e39", font: "Inter, system-ui, -apple-system, Segoe UI, sans-serif",
 };
-const DEFAULT_OPTS = { style: "candles", volume: true, logScale: false, rsi: false, grid: true, watermark: true,
+// grid is off by default (premium look); the user turns it on from the chart menu
+const DEFAULT_OPTS = { style: "candles", volume: true, logScale: false, rsi: false, grid: false, watermark: true,
   indicators: { ema20: false, ema50: true, ema200: true, bb: false, vwap: false } };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const easeOut = (t) => 1 - Math.pow(1 - t, 3);
@@ -1092,8 +1094,8 @@ export class ChartEngine {
     // watermark
     if (this.opts.watermark && this.label) {
       ctx.save();
-      ctx.font = `800 ${Math.round(Math.min(this.plotW / 9, this.mainH / 5))}px ${theme.font}`;
-      ctx.fillStyle = hexA(theme.text, 0.05);
+      ctx.font = `700 ${Math.round(Math.min(this.plotW / 11, this.mainH / 6))}px ${theme.font}`;
+      ctx.fillStyle = hexA(theme.text, 0.035);
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(this.label, this.plotW / 2, this.mainH / 2);

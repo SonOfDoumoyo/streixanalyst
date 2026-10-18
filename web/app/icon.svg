@@ -1,13 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><defs><radialGradient id="ibg" cx="30%" cy="20%" r="95%"><stop offset="0" stop-color="#0F2347"/><stop offset="0.6" stop-color="#081430"/><stop offset="1" stop-color="#050B18"/></radialGradient></defs><rect width="512" height="512" rx="112" fill="url(#ibg)"/><rect x="1.5" y="1.5" width="509" height="509" rx="110.5" fill="none" stroke="#2C84F7" stroke-opacity="0.28" stroke-width="3"/><svg x="66.0" y="156.9" width="380.0" height="198.3" viewBox="0 0 184 96" fill="none">
-  <defs>
-    <linearGradient id="isaTop" x1="18" y1="6" x2="86" y2="42" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#A8DBFF"/><stop offset="0.5" stop-color="#55AEFF"/><stop offset="1" stop-color="#2C84F7"/></linearGradient>
-    <linearGradient id="isaBot" x1="22" y1="50" x2="92" y2="90" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#3B90FA"/><stop offset="0.55" stop-color="#1A63EC"/><stop offset="1" stop-color="#0A3CC4"/></linearGradient>
-    <linearGradient id="isaA" x1="104" y1="90" x2="132" y2="6" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#1A63EC"/><stop offset="0.6" stop-color="#55AEFF"/><stop offset="1" stop-color="#A8DBFF"/></linearGradient>
-    <linearGradient id="isaF" x1="134" y1="6" x2="168" y2="90" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#2C84F7"/><stop offset="1" stop-color="#0A3CC4"/></linearGradient>
-  </defs>
-  <path d="M53 6 H88 L59 37 Q55 41.5 49 41.5 H16 L45 10.5 Q48.5 6 53 6 Z" fill="url(#isaTop)"/>
-  <path d="M59 48.5 H92 L63 85.5 Q59.5 90 53.5 90 H20 L50 53 Q53.5 48.5 59 48.5 Z" fill="url(#isaBot)"/>
-  <path fill-rule="evenodd" d="M126.5 6 H145.5 L172 90 H157.5 L152.6 74.5 H120.4 L115.5 90 H101 Z M124.2 62.5 H148.8 L136.5 23.5 Z" fill="url(#isaA)"/>
-  <path d="M136 6 H145.5 L172 90 H157.5 L136.5 23.5 Z" fill="url(#isaF)"/>
-  <path d="M121.6 62.5 H156.6 L153.9 74.5 H117.9 Z" fill="#A8DBFF"/>
-</svg></svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#000"/><rect x="1.5" y="1.5" width="509" height="509" rx="110.5" fill="none" stroke="#262626" stroke-width="3"/><path fill="#fff" d="M164.97 350.72C209.73 350.72 236.07 329.08 236.07 295.57C236.07 264.66 212.08 248.83 181.05 241.66L164.35 237.58C148.77 233.87 134.92 228.05 134.92 214.33C134.92 201.96 145.8 193.06 165.09 193.06C184.01 193.06 195.76 201.59 197.12 216.31H233.6C232.98 183.91 206.27 161.28 165.46 161.28C125.4 161.28 96.22 183.54 96.22 216.8C96.22 243.63 114.89 259.34 146.05 266.88L166.33 271.95C186.36 276.9 198.11 282.71 198.11 295.32C198.11 309.3 184.75 318.82 164.6 318.82C144.2 318.82 129.23 309.54 128 290.87H91.27C92.38 330.07 120.7 350.72 164.97 350.72ZM243.78 348H285.45L299.18 305.21H364.59L378.81 348H420.73L356.18 163.75H306.72ZM308.57 275.66 313.89 259.09C319.45 240.54 324.9 218.66 331.08 193.31C337.51 218.41 343.32 240.17 349.26 259.09L354.82 275.66Z"/></svg>
