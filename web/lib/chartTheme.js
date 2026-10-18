@@ -7,13 +7,13 @@ export const CHART_PALETTES = {
   dark: {
     bg: "#000000",
     grid: "rgba(42,46,57,0.85)",
-    text: "#787b86",
+    text: "#9a9fac",
     crosshair: "#758696",
     axisLine: "#2a2e39",
     label: "#2a3a5c",          // crosshair price and time tags
-    ma20: "rgba(255,255,255,0.55)",
-    ma50: "rgba(255,213,79,0.75)",
-    ma200: "rgba(155,123,255,0.95)",
+    ma20: "#3fb8ff",           // solid, saturated indicator lines, as on TradingView
+    ma50: "#ffb020",
+    ma200: "#b78bff",
   },
   light: {
     bg: "#ffffff",
@@ -22,9 +22,9 @@ export const CHART_PALETTES = {
     crosshair: "#9598a1",
     axisLine: "#e0e3eb",
     label: "#2a2e39",
-    ma20: "rgba(19,23,34,0.45)",
-    ma50: "rgba(214,140,0,0.95)",
-    ma200: "rgba(103,58,209,0.9)",
+    ma20: "#1e6fe0",
+    ma50: "#e08a00",
+    ma200: "#7a3fe0",
   },
 };
 

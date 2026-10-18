@@ -11,13 +11,13 @@ export const TOOLS = {
   measure: { pts: 2, label: "Measure" }, text: { pts: 1, label: "Text note" },
 };
 const FIB = [0, 0.236, 0.382, 0.5, 0.618, 0.705, 0.786, 1, 1.272, 1.618];
-const FIB_COL = ["#9aa7bd", "#ef5350", "#ff9800", "#4caf50", "#26a69a", "#2fb5d6", "#f0b90b", "#9aa7bd", "#9b7bff", "#e91e63"];
-// TradingView dark palette: chart #000000, axis text #787b86, candles #089981 / #f23645.
+const FIB_COL = ["#9aa7bd", "#ff4d5e", "#ffa726", "#3ddc84", "#12d9a0", "#2fb5d6", "#ffc83d", "#9aa7bd", "#a77bff", "#ff4fa3"];
+// TradingView-style dark palette, pushed brighter: chart #000000, axis text #9a9fac, candles #12d9a0 / #ff3b5c.
 const DEFAULT_THEME = {
-  bg: "#000000", grid: "rgba(42,46,57,0.85)", text: "#787b86", crosshair: "#758696",
-  up: "#089981", down: "#f23645", wickUp: "#089981", wickDown: "#f23645", borderUp: "#089981", borderDown: "#f23645",
+  bg: "#000000", grid: "rgba(42,46,57,0.85)", text: "#9a9fac", crosshair: "#758696",
+  up: "#12d9a0", down: "#ff3b5c", wickUp: "#12d9a0", wickDown: "#ff3b5c", borderUp: "#12d9a0", borderDown: "#ff3b5c",
   line: "#2962ff", axisLine: "#2a2e39", font: "IBM Plex Sans, system-ui, -apple-system, Segoe UI, sans-serif",
-  label: "#2a3a5c", ma20: "rgba(255,255,255,0.55)", ma50: "rgba(255,213,79,0.75)", ma200: "rgba(155,123,255,0.95)",
+  label: "#2a3a5c", ma20: "#3fb8ff", ma50: "#ffb020", ma200: "#b78bff",
 };
 // grid is off by default (premium look); the user turns it on from the chart menu
 const DEFAULT_OPTS = { style: "candles", volume: true, logScale: false, rsi: false, grid: false, watermark: true,
@@ -1248,7 +1248,7 @@ export class ChartEngine {
       const k = src[i];
       if (!k) continue;
       const vh = (k.v / mx) * h;
-      ctx.fillStyle = hexA(k.c >= k.o ? this.theme.up : this.theme.down, 0.22);
+      ctx.fillStyle = hexA(k.c >= k.o ? this.theme.up : this.theme.down, 0.42);
       ctx.fillRect(this.x(i) - w / 2, base - vh, w, vh);
     }
   }
@@ -1367,21 +1367,21 @@ export class ChartEngine {
     if (!I) return;
     const on = this.opts.indicators || {};
     if (on.bb) {
-      this._line(I.bb.up, i0, i1, "rgba(155,123,255,0.65)", 1);
-      this._line(I.bb.lo, i0, i1, "rgba(155,123,255,0.65)", 1);
-      this._line(I.bb.mid, i0, i1, "rgba(155,123,255,0.35)", 1, [4, 4]);
+      this._line(I.bb.up, i0, i1, "rgba(79,157,255,0.9)", 1.2);
+      this._line(I.bb.lo, i0, i1, "rgba(79,157,255,0.9)", 1.2);
+      this._line(I.bb.mid, i0, i1, "rgba(79,157,255,0.6)", 1.2, [4, 4]);
     }
     if (on.ema20) this._line(I.ema20, i0, i1, this.theme.ma20, 1.1);
     if (on.ema50) this._line(I.ema50, i0, i1, this.theme.ma50, 1.2);
     if (on.ema200) this._line(I.ema200, i0, i1, this.theme.ma200, 1.6);
-    if (on.vwap && I.vwap) this._line(I.vwap, i0, i1, "rgba(255,152,0,0.85)", 1.3);
+    if (on.vwap && I.vwap) this._line(I.vwap, i0, i1, "#ff8a1f", 1.5);
   }
 
   _drawLastLine() {
     const k = this.d[this.d.length - 1];
     const ctx = this.ctx;
     const yy = Math.round(this.y(k.c)) + 0.5;
-    ctx.strokeStyle = hexA(k.c >= k.o ? this.theme.up : this.theme.down, 0.75);
+    ctx.strokeStyle = hexA(k.c >= k.o ? this.theme.up : this.theme.down, 0.9);
     ctx.setLineDash([2, 3]);
     ctx.lineWidth = 1;
     ctx.beginPath();

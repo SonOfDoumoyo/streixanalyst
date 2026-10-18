@@ -615,8 +615,8 @@ export default function Terminal() {
             ) : null}
             {hover && !mobile ? (
               <div className="ind num">
-                {settings.indicators.ema50 && hover.ema50 ? <span style={{ color: "rgba(255,213,79,.9)" }}>EMA50 {fmtPrice(hover.ema50, dec)}</span> : null}
-                {settings.indicators.ema200 && hover.ema200 ? <span style={{ color: "#b39dff" }}>EMA200 {fmtPrice(hover.ema200, dec)}</span> : null}
+                {settings.indicators.ema50 && hover.ema50 ? <span style={{ color: "#ffb020" }}>EMA50 {fmtPrice(hover.ema50, dec)}</span> : null}
+                {settings.indicators.ema200 && hover.ema200 ? <span style={{ color: "#b78bff" }}>EMA200 {fmtPrice(hover.ema200, dec)}</span> : null}
                 {settings.chart.rsi && hover.rsi ? <span style={{ color: "#b388ff" }}>RSI {hover.rsi.toFixed(1)}</span> : null}
               </div>
             ) : null}

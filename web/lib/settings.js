@@ -4,12 +4,12 @@ export const DEFAULT_SETTINGS = {
   theme: "dark",
   candles: {
     style: "candles", // candles | hollow | bars | line | area | heikin
-    up: "#089981",
-    down: "#f23645",
-    wickUp: "#089981",
-    wickDown: "#f23645",
-    borderUp: "#089981",
-    borderDown: "#f23645",
+    up: "#12d9a0",
+    down: "#ff3b5c",
+    wickUp: "#12d9a0",
+    wickDown: "#ff3b5c",
+    borderUp: "#12d9a0",
+    borderDown: "#ff3b5c",
   },
   chart: {
     skins: {},                 // per app mode: { dark: { bg, grid, text }, light: { ... } }, set from Settings
@@ -17,7 +17,7 @@ export const DEFAULT_SETTINGS = {
     grid: false,
     gridColor: "rgba(42,46,57,0.85)",
     crosshair: "#758696",
-    textColor: "#787b86",
+    textColor: "#9a9fac",
     volume: true,
     logScale: false,
     rsi: false,
@@ -33,7 +33,7 @@ export const DEFAULT_SETTINGS = {
 };
 
 export const CANDLE_PRESETS = [
-  { name: "TradingView", up: "#089981", down: "#f23645" },
+  { name: "TradingView", up: "#12d9a0", down: "#ff3b5c" },
   { name: "Classic", up: "#26a69a", down: "#ef5350" },
   { name: "Streix", up: "#2fd3a6", down: "#ff5d7a" },
   { name: "Ocean", up: "#3b90fa", down: "#f5a524" },
@@ -44,7 +44,7 @@ export const CANDLE_PRESETS = [
 
 // Chart backgrounds to choose from, per app mode. The chart always matches the app's light or dark mode.
 export const CHART_BACKGROUNDS = [
-  { mode: "dark", name: "Black", bg: "#000000", grid: "rgba(255,255,255,0.05)", text: "#787b86" },
+  { mode: "dark", name: "Black", bg: "#000000", grid: "rgba(255,255,255,0.05)", text: "#9a9fac" },
   { mode: "dark", name: "Carbon", bg: "#0b0b0c", grid: "rgba(255,255,255,0.05)", text: "#9aa3ad" },
   { mode: "dark", name: "Graphite", bg: "#131316", grid: "rgba(255,255,255,0.06)", text: "#9a9ea8" },
   { mode: "dark", name: "Charcoal", bg: "#171717", grid: "rgba(255,255,255,0.07)", text: "#a8a49a" },
