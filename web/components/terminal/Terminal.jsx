@@ -89,12 +89,8 @@ export default function Terminal() {
   resRef.current = res;
   const replayRef = useRef(null);
   replayRef.current = replay;
-  // starting a past moment on a phone or narrow window closes the side panel, so the chart is what you see;
-  // a reveal (ahead > 0) keeps the panel open so the outcome cards stay in view
-  const startReplay = useCallback((r) => {
-    setReplay(r);
-    if (r && !r.ahead && narrow) setPanelOpen(false);
-  }, [narrow]);
+  // the analyst's setup and drawings for the replay moment, kept so they can be drawn again when a reveal reloads the chart
+  const replayOverlay = useRef(null);
 
   // the chart follows the app's light or dark mode (see lib/chartTheme.js)
   const theme = useMemo(() => chartThemeFor(settings.theme, settings.chart, settings.candles),
@@ -167,6 +163,7 @@ export default function Terminal() {
   const loadChart = useCallback(async (sym, frame, rp) => {
     const e = eng.current;
     if (!e) return;
+    if (!rp) replayOverlay.current = null;
     setChartState({ loading: true, error: null });
     setRes(null);
     setStale(false);
@@ -179,6 +176,9 @@ export default function Terminal() {
       e.setData(d.candles, { tfSec: d.tf_seconds, decimals: d.decimals, label: `${d.display} · ${frame}` });
       setMeta(d);
       setChartState({ loading: false, error: null });
+      // a replay analysis stays on its chart, also after a reveal reloads the candles
+      const ro = replayOverlay.current;
+      if (rp && ro && ro.key === `${sym}|${frame}|${rp.at}`) e.setAnalysis(ro.ov.items, { animate: false, pins: ro.ov.pins });
     } catch (err) {
       if (sym !== symbolRef.current) return;
       e.setData([], {});
@@ -264,11 +264,30 @@ export default function Terminal() {
     return () => clearInterval(t);
   }, [busy]);
 
+  // the replay analysis is drawn on the replay chart: the setup, the levels and the drawings, like a live analysis
+  const drawReplayAnalysis = (d, where) => {
+    if (!d || !where) {
+      replayOverlay.current = null;
+      if (eng.current) eng.current.clearAnalysis();
+      return;
+    }
+    const ov = toOverlay(d, theme);
+    replayOverlay.current = { key: `${where.symbol}|${where.tf}|${where.at}`, ov };
+    if (!eng.current) return;
+    eng.current.setAnalysis(ov.items, { animate: true, pins: ov.pins });
+    if (d.view && d.meta && d.candles && d.candles.length) {
+      eng.current.fitTimes(d.candles[Math.max(0, d.view.x_from)][0], d.candles[d.candles.length - 1][0] + d.meta.tf_seconds * 30, 6);
+    }
+  };
   const showLimit = useCallback((e) => setPaywall({ message: e.message, detail: e.detail }), []);
 
   const analyse = useCallback(async () => {
     if (replayRef.current) {
-      toast("You're looking at a past moment. Analyse it from the Replay tab.", "info");
+      // in a replay the analysis runs for that moment, from the Replay tab
+      setTab("replay");
+      setPanelOpen(true);
+      setPanelHidden(false);
+      toast("Press Analyse this moment in the Replay tab.", "info");
       return;
     }
     if (busy || !eng.current || chartState.error) return;
@@ -446,7 +465,7 @@ export default function Terminal() {
         ) : null}
         {tab === "news" ? <NewsPanel symbol={symbol} tf={tf} /> : null}
         {tab === "divergence" ? <DivergencePanel symbol={symbol} tf={tf} /> : null}
-        {tab === "replay" ? <ReplayPanel symbol={symbol} tf={tf} replay={replay} setReplay={startReplay} /> : null}
+        {tab === "replay" ? <ReplayPanel symbol={symbol} tf={tf} replay={replay} setReplay={setReplay} onAnalysis={drawReplayAnalysis} /> : null}
       </div>
     </>
   );
@@ -678,7 +697,7 @@ export default function Terminal() {
             </div>
           ) : null}
         </div>
-        <aside className={`rpanel ${panelVisible ? "open" : ""}`} aria-label="Analysis and tools" style={!narrow && panelHidden ? { display: "none" } : undefined}>
+        <aside className={`rpanel ${panelVisible ? "open" : ""} ${narrow && tab === "replay" ? "sheet" : ""}`} aria-label="Analysis and tools" style={!narrow && panelHidden ? { display: "none" } : undefined}>
           {panelContent}
         </aside>
         {!narrow ? (

@@ -311,7 +311,7 @@ svg { flex-shrink: 0; }
   .toolbar.hidden-m { display: none; }
 }
 .chart-wrap { position: relative; min-width: 0; min-height: 0; overflow: hidden; background: var(--chart-bg, var(--bg)); }
-.chart-canvas { position: absolute; inset: 0; touch-action: none; outline: none; }
+.chart-canvas { position: absolute; inset: 0; touch-action: none; outline: none; -webkit-touch-callout: none; user-select: none; }
 .legend {
   position: absolute; left: 10px; top: 8px; z-index: 5; pointer-events: none; font-size: 0.8rem; display: flex; flex-direction: column; gap: 2px;
   max-width: calc(100% - 100px);
@@ -350,6 +350,10 @@ svg { flex-shrink: 0; }
 }
 @media (max-width: 760px) {
   .rpanel { top: var(--topbar); bottom: 60px; width: 100vw; border-left: 0; }
+}
+/* replay on a phone: a sheet over the lower half, so the chart at that moment stays visible above it */
+@media (max-width: 1100px) {
+  .rpanel.sheet { top: auto; bottom: 60px; height: min(52vh, 460px); width: 100vw; border-left: 0; border-top: 1px solid var(--line); box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.5); }
 }
 .tabs { display: flex; gap: 2px; padding: 6px; border-bottom: 1px solid var(--line); flex: none; overflow-x: auto; scrollbar-width: none; }
 .tabs::-webkit-scrollbar { display: none; }

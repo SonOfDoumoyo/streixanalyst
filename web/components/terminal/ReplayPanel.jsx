@@ -63,7 +63,7 @@ function OutcomeCard({ title, o, dec }) {
   );
 }
 
-export default function ReplayPanel({ symbol, tf, replay, setReplay }) {
+export default function ReplayPanel({ symbol, tf, replay, setReplay, onAnalysis }) {
   const at = replay ? replay.at : null;
   const [when, setWhen] = useState(() => localInput(new Date(Date.now() - 24 * 60 * 60 * 1000)));
   const [analysis, setAnalysis] = useState(null);
@@ -78,6 +78,7 @@ export default function ReplayPanel({ symbol, tf, replay, setReplay }) {
     setCall(NO_CALL);
     setResult(null);
     setError(null);
+    if (onAnalysis) onAnalysis(null);
   }, [at]);
 
   const dec = analysis && analysis.meta ? analysis.meta.decimals : 2;
@@ -98,7 +99,9 @@ export default function ReplayPanel({ symbol, tf, replay, setReplay }) {
     setBusy(true);
     setError(null);
     try {
-      setAnalysis(await post("/replay/analyze", { symbol, tf, at }));
+      const d = await post("/replay/analyze", { symbol, tf, at });
+      setAnalysis(d);
+      if (onAnalysis) onAnalysis(d, { symbol, tf, at });
     } catch (e) {
       setError(e.message || "The analysis failed.");
     }

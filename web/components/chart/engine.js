@@ -639,7 +639,20 @@ export class ChartEngine {
       }
     }
     this.drag = { mode: "pan", x0: x, y0: y, right0: this.right, pmin: this.pmin, pmax: this.pmax, moved: false, touch,
-      t0: performance.now() };
+      t0: performance.now(), far: false };
+    // touch: holding still turns the press into a crosshair that follows the finger, like TradingView.
+    // Moving more than 10px first keeps it a pan.
+    if (touch) {
+      clearTimeout(this._pressT);
+      this._pressT = setTimeout(() => {
+        const dr = this.drag;
+        if (!dr || dr.mode !== "pan" || dr.far || this.pointers.size !== 1) return;
+        dr.mode = "cross";
+        this.hover = { x: dr.x0, y: dr.y0, area: "plot", touch: true };
+        this._emitHover();
+        this.dirty();
+      }, 350);
+    }
   }
 
   _place(x, y, touch) {
@@ -728,10 +741,17 @@ export class ChartEngine {
       }
       return;
     }
+    if (dr && dr.mode === "cross") {
+      this.hover = { x: clamp(x, 0, this.plotW), y: clamp(y, 0, this.mainH), area: "plot", touch: true };
+      this._emitHover();
+      this.dirty();
+      return;
+    }
     if (dr) {
       const dx = x - dr.x0;
       const dy = y - dr.y0;
       if (Math.abs(dx) + Math.abs(dy) > 3) dr.moved = true;
+      if (Math.hypot(dx, dy) > 10) dr.far = true;
       if (dr.mode === "pan") {
         this.right = dr.right0 - dx / this.spacing;
         this._clampRight();
@@ -819,6 +839,7 @@ export class ChartEngine {
   onUp(e) {
     const { x, y } = this._pos(e);
     this.pointers.delete(e.pointerId);
+    clearTimeout(this._pressT);
     try { this.canvas.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
     const dr = this.drag;
     if (this.placing) {
@@ -833,6 +854,12 @@ export class ChartEngine {
     }
     this.drag = null;
     if (!dr) return;
+    if (dr.mode === "cross") {
+      this.hover = null;
+      this.emit("hover", null);
+      this.dirty();
+      return;
+    }
     if (dr.mode === "handle" || dr.mode === "body") {
       if (dr.moved) this._changed();
       else this.undoStack.pop();
@@ -1389,7 +1416,7 @@ export class ChartEngine {
 
   _drawCrosshair() {
     const h = this.hover;
-    if (!h || h.area === "paxis" || h.area === "taxis" || this.drag) return;
+    if (!h || h.area === "paxis" || h.area === "taxis" || (this.drag && this.drag.mode !== "cross")) return;
     const ctx = this.ctx;
     const i = Math.round(this.index(h.x));
     const xx = Math.round(this.x(i)) + 0.5;
@@ -1555,7 +1582,7 @@ export class ChartEngine {
     }
     // crosshair price always on top
     const h = this.hover;
-    if (h && !this.drag && h.area !== "taxis" && h.y <= this.mainH) {
+    if (h && (!this.drag || this.drag.mode === "cross") && h.area !== "taxis" && h.y <= this.mainH) {
       this._tag(h.y, this.fmt(this.price(h.y)), this.theme.label);
     }
   }
@@ -1580,7 +1607,7 @@ export class ChartEngine {
       ctx.fillText(this._timeLabel(tk.t), tk.x, top + this.timeH / 2);
     }
     const h = this.hover;
-    if (h && !this.drag && h.area !== "paxis") {
+    if (h && (!this.drag || this.drag.mode === "cross") && h.area !== "paxis") {
       const i = Math.round(this.index(h.x));
       const t = this.indexToTime(i);
       const txt = this._timeLabel(t, true);
