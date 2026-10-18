@@ -165,6 +165,8 @@ export default function Terminal() {
     if (!e) return;
     if (!rp) replayOverlay.current = null;
     setChartState({ loading: true, error: null });
+    setMeta(null);          // the previous symbol's price and stats go with its chart
+    e.setData([], {});      // hide the previous chart while the new one loads
     setRes(null);
     setStale(false);
     setLayers([]);
@@ -652,7 +654,13 @@ export default function Terminal() {
             </>
           ) : null}
           {chartState.loading ? (
-            <div className="chart-msg"><div><span className="spinner dark" style={{ width: 28, height: 28, margin: "0 auto" }} /></div></div>
+            <div className="chart-msg chart-loading" role="status" aria-live="polite">
+              <div className="chart-loading-card">
+                <span className="spinner dark" style={{ width: 26, height: 26 }} />
+                <b>{symbol.split(":").pop()} · {TF_LABEL[tf] || tf}</b>
+                <span className="muted" style={{ fontSize: "0.88rem" }}>Loading the latest candles…</span>
+              </div>
+            </div>
           ) : null}
           {chartState.error ? (
             <div className="chart-msg">

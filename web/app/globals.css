@@ -329,6 +329,9 @@ svg { flex-shrink: 0; }
 .live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px rgba(34, 195, 142, 0.18); animation: pulse 2s infinite; }
 .chart-msg { position: absolute; inset: 0; display: grid; place-items: center; z-index: 6; pointer-events: none; }
 .chart-msg > div { pointer-events: auto; text-align: center; max-width: 420px; padding: 20px; }
+/* loading a symbol or timeframe: the previous chart is hidden behind a plain loading screen */
+.chart-msg.chart-loading { background: var(--bg); pointer-events: auto; }
+.chart-loading-card { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
 .scanline { position: absolute; top: 0; bottom: 0; width: 140px; z-index: 4; pointer-events: none;
   background: linear-gradient(90deg, transparent, rgba(85, 174, 255, 0.10), rgba(85, 174, 255, 0.28), transparent);
   animation: scan 1.6s var(--ease) infinite; }

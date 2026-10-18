@@ -46,7 +46,8 @@ export async function api(path, { method = "GET", body, form, signal, headers = 
   let data = null;
   const text = await res.text();
   if (text) {
-    try { data = JSON.parse(text); } catch { data = { detail: text.slice(0, 200) }; }
+    // a plain-text body (for example "Internal Server Error" from a proxy) is never shown raw; the status decides the message
+    try { data = JSON.parse(text); } catch { data = null; }
   }
   if (!res.ok) throw new ApiError(messageFrom(data, res.status), res.status, data && data.detail);
   return data;
