@@ -79,11 +79,10 @@ export default function Landing() {
 
       <header className="container lp-hero2">
         <div className="lp-hero2-copy">
-          <p className="eyebrow">Chart analysis for crypto, forex, metals, indices and stocks</p>
           <h1 className="lp-h1">Read any chart with an analyst beside you.</h1>
           <p className="lp-lead">
-            Pick a market and press Analyse. StreixAnalyst marks the structure, the liquidity and the key levels, checks the news,
-            and drafts a complete trade plan: entry, stop, targets, position size and a safe leverage. StreixAI explains every step.
+            Pick a market and press Analyse. You get the structure, key levels, news and a trade plan with entry, stop, targets
+            and position size. StreixAI explains each step.
           </p>
           <div className="row wrap lp-cta">
             <Link className="btn primary lg" href={primaryHref}>

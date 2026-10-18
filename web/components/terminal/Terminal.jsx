@@ -712,11 +712,11 @@ export default function Terminal() {
 
       {mobile ? (
         <nav className="bottom-nav" aria-label="Sections">
-          <button className={!panelOpen ? "on" : ""} onClick={() => setPanelOpen(false)}><Icon name="candles" /> Chart</button>
-          <button className={panelOpen && tab === "analysis" ? "on" : ""} onClick={() => openTab("analysis")}><Icon name="target" /> Analysis</button>
-          <button className="fab" data-tour="analyse" onClick={analyse} aria-label="Analyse"><span className="ring">{busy ? <span className="spinner" /> : <Icon name="zap" size={24} />}</span></button>
-          <button className={panelOpen && tab === "ai" ? "on" : ""} onClick={() => openTab("ai")}><Icon name="sparkles" /> StreixAI</button>
-          <button className={panelOpen && tab === "watchlist" ? "on" : ""} onClick={() => openTab("watchlist")}><Icon name="list" /> Watchlist</button>
+          <button className={!panelOpen ? "on" : ""} onClick={() => setPanelOpen(false)}><Icon name="candles" /><span>Chart</span></button>
+          <button className={panelOpen && tab === "watchlist" ? "on" : ""} onClick={() => openTab("watchlist")}><Icon name="list" /><span>Watchlist</span></button>
+          <button className="fab" data-tour="analyse" onClick={analyse} aria-label="Analyse"><span className="ring">{busy ? <span className="spinner" /> : <Icon name="zap" size={20} />}</span><span>Analyse</span></button>
+          <button className={panelOpen && tab === "replay" ? "on" : ""} onClick={() => openTab("replay")}><Icon name="clock" /><span>Replay</span></button>
+          <button className={panelOpen && tab === "ai" ? "on" : ""} onClick={() => openTab("ai")}><Icon name="sparkles" /><span>StreixAI</span></button>
         </nav>
       ) : null}
 

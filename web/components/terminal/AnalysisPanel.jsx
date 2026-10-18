@@ -230,10 +230,10 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
           </div>
           <h3 style={{ margin: "0 0 6px", fontFamily: "var(--font-display)" }}>Ready when you are</h3>
           <p className="muted" style={{ margin: "0 0 14px", fontSize: "0.9rem" }}>
-            Press <b>Analyse</b> and StreixAnalyst reads {symbolLabel} on {TF_LABEL[tf] || tf}: structure, liquidity, key levels, the news, and a full trade plan with entry, stop and targets — drawn right on your chart.
+            Structure, liquidity, key levels, news and a trade plan with entry, stop and targets for {symbolLabel} on {TF_LABEL[tf] || tf}, drawn on your chart.
           </p>
           <button className="btn primary block lg" onClick={onAnalyse}><Icon name="zap" size={18} /> Analyse {symbolLabel}</button>
-          <div className="hint" style={{ marginTop: 10 }}>Tip: draw your own levels first — the analyst will tell you what it thinks of them.</div>
+          <div className="hint" style={{ marginTop: 10 }}>Draw your own levels first if you want the analyst to check them.</div>
         </div>
         <div className="section-title">Your settings</div>
         <AnalysisOptions settings={settings} updateSettings={updateSettings} />

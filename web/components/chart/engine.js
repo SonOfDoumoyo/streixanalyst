@@ -318,13 +318,30 @@ export class ChartEngine {
   autoscale() {
     const [i0, i1] = this.visRange();
     const src = this.ha || this.d;
+    // one bad tick can stretch the scale far past the price. A wick more than 6 typical ranges beyond the candles
+    // around it is clipped to that band, so trends and real moves keep their full height.
+    const n = src.length;
     let lo = Infinity;
     let hi = -Infinity;
     for (let i = i0; i <= i1; i++) {
       const k = src[i];
       if (!k) continue;
-      if (k.l < lo) lo = k.l;
-      if (k.h > hi) hi = k.h;
+      const near = [];
+      for (let j = Math.max(0, i - 3); j <= Math.min(n - 1, i + 3); j++) if (j !== i && src[j]) near.push(src[j]);
+      let l = k.l;
+      let h = k.h;
+      if (near.length >= 3) {
+        const lows = near.map((x) => x.l).sort((a, b) => a - b);
+        const highs = near.map((x) => x.h).sort((a, b) => a - b);
+        const spans = near.map((x) => x.h - x.l).sort((a, b) => a - b);
+        const band = spans[spans.length >> 1] * 6 || Infinity;
+        const midLo = lows[lows.length >> 1];
+        const midHi = highs[highs.length >> 1];
+        if (l < midLo - band) l = midLo - band;
+        if (h > midHi + band) h = midHi + band;
+      }
+      if (l < lo) lo = l;
+      if (h > hi) hi = h;
     }
     if (!Number.isFinite(lo)) {
       if (this.d.length) {
