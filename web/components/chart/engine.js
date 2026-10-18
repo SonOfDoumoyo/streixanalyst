@@ -53,6 +53,9 @@ function distToSeg(px, py, x1, y1, x2, y2) {
   return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
 }
 
+// Candle body width for a bar spacing: 80% of the slot, so bodies are thick with a narrow gap, always a whole pixel count.
+const candleWidth = (sp) => Math.max(1, Math.min(Math.round(sp * 0.8), Math.max(1, Math.round(sp) - 1)));
+
 export class ChartEngine {
   constructor(canvas, { onEvent, scale = 1 } = {}) {
     this.canvas = canvas;
@@ -101,7 +104,7 @@ export class ChartEngine {
     this._alive = true;
     this._lastTap = 0;
     this._h = {
-      down: (e) => this.onDown(e), move: (e) => this.onMove(e), up: (e) => this.onUp(e), leave: () => this.onLeave(),
+      down: (e) => this.onDown(e), move: (e) => this.onMove(e), up: (e) => this.onUp(e), leave: (e) => this.onLeave(e),
       wheel: (e) => this.onWheel(e), key: (e) => this.onKey(e), dbl: (e) => this.onDbl(e), ctx: (e) => e.preventDefault(),
     };
     const c = canvas;
@@ -368,7 +371,7 @@ export class ChartEngine {
 
   resetView() {
     const n = this.d.length;
-    this.spacing = clamp(Math.round(9 * this.scale), 3, 40);
+    this.spacing = clamp(Math.round(10 * this.scale), 3, 40);
     this.right = n - 1 + Math.max(6, Math.round((this.plotW || 800) / this.spacing * 0.08));
     this.auto = true;
     this.dirty();
@@ -639,7 +642,7 @@ export class ChartEngine {
       }
     }
     this.drag = { mode: "pan", x0: x, y0: y, right0: this.right, pmin: this.pmin, pmax: this.pmax, moved: false, touch,
-      t0: performance.now(), far: false };
+      t0: performance.now(), far: false, wasCross: !!(this.hover && this.hover.touch) };
     // touch: holding still turns the press into a crosshair that follows the finger, like TradingView.
     // Moving more than 10px first keeps it a pan.
     if (touch) {
@@ -723,7 +726,7 @@ export class ChartEngine {
       const [a, b] = [...this.pointers.values()];
       const dist = Math.hypot(a.x - b.x, a.y - b.y);
       const mid = (a.x + b.x) / 2;
-      this.spacing = clamp(dr.sp0 * (dist / (dr.d0 || 1)), 1.2, 80 * this.scale);
+      this.spacing = clamp(dr.sp0 * (dist / (dr.d0 || 1)), 5 * this.scale, 80 * this.scale);
       this.right = dr.i0 + (this.plotW - mid) / this.spacing;
       this._clampRight();
       this.dirty();
@@ -752,6 +755,11 @@ export class ChartEngine {
       const dy = y - dr.y0;
       if (Math.abs(dx) + Math.abs(dy) > 3) dr.moved = true;
       if (Math.hypot(dx, dy) > 10) dr.far = true;
+      if (dr.mode === "pan" && dr.far && dr.wasCross && this.hover && this.hover.touch) {
+        // dragging the chart moves on, so the crosshair from the earlier press goes away
+        this.hover = null;
+        this.emit("hover", null);
+      }
       if (dr.mode === "pan") {
         this.right = dr.right0 - dx / this.spacing;
         this._clampRight();
@@ -787,7 +795,7 @@ export class ChartEngine {
         return;
       }
       if (dr.mode === "xscale") {
-        this.spacing = clamp(dr.sp0 * Math.exp((x - dr.x0) * 0.008), 1.2, 80 * this.scale);
+        this.spacing = clamp(dr.sp0 * Math.exp((x - dr.x0) * 0.008), 5 * this.scale, 80 * this.scale);
         this.right = dr.i0 + (this.plotW - dr.mid) / this.spacing;
         this._clampRight();
         this.dirty();
@@ -855,8 +863,7 @@ export class ChartEngine {
     this.drag = null;
     if (!dr) return;
     if (dr.mode === "cross") {
-      this.hover = null;
-      this.emit("hover", null);
+      // a long press leaves the crosshair up after the finger lifts; the next tap clears it
       this.dirty();
       return;
     }
@@ -876,16 +883,24 @@ export class ChartEngine {
           const now = performance.now();
           if (now - this._lastTap < 320) this.resetView();
           this._lastTap = now;
-          this.hover = { x, y, area: "plot", touch: true };
-          this._emitHover();
+          if (dr.wasCross) {
+            // the tap that follows a long press clears the crosshair
+            this.hover = null;
+            this.emit("hover", null);
+          } else {
+            this.hover = { x, y, area: "plot", touch: true };
+            this._emitHover();
+          }
         }
       }
       this.dirty();
     }
   }
 
-  onLeave() {
+  onLeave(e) {
     if (this.drag) return;
+    // touch screens fire pointerleave when the finger lifts; a long-press crosshair stays up until the next tap
+    if (e && e.pointerType === "touch") return;
     this.hover = null;
     this.emit("hover", null);
     this.dirty();
@@ -915,7 +930,7 @@ export class ChartEngine {
     } else {
       const f = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015));
       const i0 = this.index(x);
-      this.spacing = clamp(this.spacing * f, 1.2, 80 * this.scale);
+      this.spacing = clamp(this.spacing * f, 5 * this.scale, 80 * this.scale);
       this.right = i0 + (this.plotW - x) / this.spacing;
       this._clampRight();
     }
@@ -983,7 +998,7 @@ export class ChartEngine {
     if (k === "+" || k === "=" || k === "-" || k === "_") {
       const f = k === "+" || k === "=" ? 1.15 : 1 / 1.15;
       const i0 = this.index(this.plotW);
-      this.spacing = clamp(this.spacing * f, 1.2, 80 * this.scale);
+      this.spacing = clamp(this.spacing * f, 5 * this.scale, 80 * this.scale);
       this.right = i0;
       this.dirty();
     }
@@ -991,7 +1006,7 @@ export class ChartEngine {
 
   zoom(f) {
     const i0 = this.index(this.plotW * 0.8);
-    this.spacing = clamp(this.spacing * f, 1.2, 80 * this.scale);
+    this.spacing = clamp(this.spacing * f, 5 * this.scale, 80 * this.scale);
     this.right = i0 + (this.plotW * 0.2) / this.spacing;
     this._clampRight();
     this.dirty();
@@ -1243,13 +1258,14 @@ export class ChartEngine {
     if (mx <= 0) return;
     const h = this.mainH * 0.16;
     const base = this.mainH;
-    const w = Math.max(1, this.spacing * 0.7);
+    const w = candleWidth(this.spacing);
+    const bb = Math.round(base);
     for (let i = i0; i <= i1; i++) {
       const k = src[i];
       if (!k) continue;
-      const vh = (k.v / mx) * h;
+      const vh = Math.max(1, Math.round((k.v / mx) * h));
       ctx.fillStyle = hexA(k.c >= k.o ? this.theme.up : this.theme.down, 0.42);
-      ctx.fillRect(this.x(i) - w / 2, base - vh, w, vh);
+      ctx.fillRect(Math.round(this.x(i)) - Math.floor(w / 2), bb - vh, w, vh);
     }
   }
 
@@ -1270,7 +1286,7 @@ export class ChartEngine {
         } else ctx.lineTo(xx, yy);
       }
       ctx.strokeStyle = th.line;
-      ctx.lineWidth = 2 * this.scale;
+      ctx.lineWidth = 2.5 * this.scale;
       ctx.stroke();
       if (style === "area") {
         ctx.lineTo(this.x(i1), this.mainH);
@@ -1284,54 +1300,56 @@ export class ChartEngine {
       }
       return;
     }
-    const bw = Math.max(1, Math.min(this.spacing * 0.72, this.spacing - 1));
-    const thin = bw < 3;
+    const bw = candleWidth(this.spacing);
+    // Every edge lands on a whole device pixel (coordinates are rounded), so bodies and wicks are crisp, not blurred.
+    const tick = this.spacing >= 7 ? 3 : 2;
     for (let i = i0; i <= i1; i++) {
       const k = src[i];
       if (!k) continue;
       const up = k.c >= k.o;
-      const xx = Math.round(this.x(i));
-      const yo = this.y(k.o);
-      const yc = this.y(k.c);
-      const yh = this.y(k.h);
-      const yl = this.y(k.l);
+      const cx = Math.round(this.x(i));
+      const left = cx - Math.floor(bw / 2);
+      const yo = Math.round(this.y(k.o));
+      const yc = Math.round(this.y(k.c));
+      const yh = Math.round(this.y(k.h));
+      const yl = Math.round(this.y(k.l));
       if (style === "bars") {
+        // OHLC bars: thick ticks, with arms as wide as a candle body
+        const off = tick % 2 ? 0.5 : 0;
+        const ox = cx + off;
         ctx.strokeStyle = up ? th.up : th.down;
-        ctx.lineWidth = Math.max(1, Math.min(2, this.spacing / 6));
+        ctx.lineWidth = tick;
+        ctx.lineCap = "butt";
         ctx.beginPath();
-        ctx.moveTo(xx + 0.5, yh);
-        ctx.lineTo(xx + 0.5, yl);
-        ctx.moveTo(xx - bw / 2, yo);
-        ctx.lineTo(xx + 0.5, yo);
-        ctx.moveTo(xx + 0.5, yc);
-        ctx.lineTo(xx + bw / 2, yc);
+        ctx.moveTo(ox, yh);
+        ctx.lineTo(ox, yl);
+        ctx.moveTo(left, yo + off);
+        ctx.lineTo(ox, yo + off);
+        ctx.moveTo(ox, yc + off);
+        ctx.lineTo(left + bw, yc + off);
         ctx.stroke();
         continue;
       }
+      // wick: one pixel wide, down the middle of the body
       ctx.fillStyle = up ? th.wickUp : th.wickDown;
-      ctx.fillRect(xx, yh, 1, Math.max(1, yl - yh));
+      ctx.fillRect(left + Math.floor(bw / 2), yh, 1, Math.max(1, yl - yh));
       const top = Math.min(yo, yc);
       const hgt = Math.max(1, Math.abs(yc - yo));
-      if (thin) {
-        ctx.fillStyle = up ? th.up : th.down;
-        ctx.fillRect(xx - Math.floor(bw / 2), top, Math.max(1, bw), hgt);
-        continue;
-      }
-      const left = Math.round(xx - bw / 2) + 0.5;
-      if (style === "hollow" && up) {
+      if (style === "hollow" && up && bw >= 5) {
+        // hollow: a 2px outline with the background inside
         ctx.fillStyle = th.bg;
         ctx.fillRect(left, top, bw, hgt);
         ctx.strokeStyle = th.borderUp || th.up;
-        ctx.lineWidth = 1;
-        ctx.strokeRect(left, Math.round(top) + 0.5, Math.round(bw) - 1, Math.max(1, Math.round(hgt) - 1));
+        ctx.lineWidth = 2;
+        ctx.strokeRect(left + 1, top + 1, bw - 2, Math.max(1, hgt - 2));
       } else {
         ctx.fillStyle = up ? th.up : th.down;
-        ctx.fillRect(left - 0.5, top, bw, hgt);
+        ctx.fillRect(left, top, bw, hgt);
         const border = up ? th.borderUp : th.borderDown;
-        if (border && border !== (up ? th.up : th.down)) {
+        if (bw >= 5 && border && border !== (up ? th.up : th.down)) {
           ctx.strokeStyle = border;
           ctx.lineWidth = 1;
-          ctx.strokeRect(left, Math.round(top) + 0.5, Math.round(bw) - 1, Math.max(1, Math.round(hgt) - 1));
+          ctx.strokeRect(left + 0.5, top + 0.5, bw - 1, Math.max(1, hgt - 1));
         }
       }
     }
