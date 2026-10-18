@@ -34,9 +34,26 @@ function safeNext(n) {
   return n && n.startsWith("/") && !n.startsWith("//") ? n : "/terminal";
 }
 
+// Which sign-in providers the server has set up. Google stays visible while the server is waking up or unreachable,
+// because the sign-in link says for itself if Google is not set up. Only a provider the server reports as off is hidden.
+function useProviders() {
+  const [providers, setProviders] = useState({ google: true, linkedin: false });
+  useEffect(() => {
+    let alive = true;
+    const load = (left) => {
+      get("/auth/providers")
+        .then((p) => { if (alive) setProviders({ google: !!p.google, linkedin: !!p.linkedin }); })
+        .catch(() => { if (alive && left > 0) setTimeout(() => load(left - 1), 4000); });
+    };
+    load(4);
+    return () => { alive = false; };
+  }, []);
+  return providers;
+}
+
 // On the sign-up page, `terms` (the Terms box) must be ticked before Google or LinkedIn can create an account.
 function OAuthButtons({ providers, next, invite, terms, learn, onBlocked }) {
-  if (!providers || (!providers.google && !providers.linkedin)) return null;
+  if (!providers.google && !providers.linkedin) return null;
   const gated = terms !== undefined;
   const q = `?next=${encodeURIComponent(next)}${invite ? `&invite=${encodeURIComponent(invite)}` : ""}` +
     (gated && terms ? `&terms=1${learn ? "&learn=1" : ""}` : "");
@@ -78,12 +95,11 @@ export function LoginForm() {
   const sp = useSearchParams();
   const router = useRouter();
   const next = safeNext(sp.get("next"));
-  const [providers, setProviders] = useState(null);
+  const providers = useProviders();
   const [f, setF] = useState({ email: "", password: "" });
   const [err, setErr] = useState(sp.get("error"));
   const [busy, setBusy] = useState(false);
   const [show, setShow] = useState(false);
-  useEffect(() => { get("/auth/providers").then(setProviders).catch(() => setProviders({})); }, []);
   useEffect(() => { if (!loading && user) router.replace(next); }, [user, loading, next, router]);
   const submit = async (e) => {
     e.preventDefault();
@@ -134,14 +150,13 @@ export function SignupForm() {
   const router = useRouter();
   const next = safeNext(sp.get("next"));
   const invite = sp.get("invite") || "";
-  const [providers, setProviders] = useState(null);
+  const providers = useProviders();
   const [f, setF] = useState({ first_name: "", last_name: "", email: "", password: "", experience: "", invite_code: invite });
   const [err, setErr] = useState(null);
   const [busy, setBusy] = useState(false);
   const [show, setShow] = useState(false);
   const [terms, setTerms] = useState(false);
   const [learn, setLearn] = useState(false);
-  useEffect(() => { get("/auth/providers").then(setProviders).catch(() => setProviders({})); }, []);
   useEffect(() => { if (!loading && user) router.replace(next); }, [user, loading, next, router]);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const submit = async (e) => {
