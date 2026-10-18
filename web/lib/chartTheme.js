@@ -5,7 +5,7 @@
 // TradingView-style palettes. Keys match what the chart engine reads from its theme.
 export const CHART_PALETTES = {
   dark: {
-    bg: "#131722",
+    bg: "#000000",
     grid: "rgba(42,46,57,0.85)",
     text: "#787b86",
     crosshair: "#758696",

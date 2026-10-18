@@ -13,7 +13,7 @@ export const DEFAULT_SETTINGS = {
   },
   chart: {
     skins: {},                 // per app mode: { dark: { bg, grid, text }, light: { ... } }, set from Settings
-    background: "#131722",
+    background: "#000000",
     grid: false,
     gridColor: "rgba(42,46,57,0.85)",
     crosshair: "#758696",
@@ -44,9 +44,9 @@ export const CANDLE_PRESETS = [
 
 // Chart backgrounds to choose from, per app mode. The chart always matches the app's light or dark mode.
 export const CHART_BACKGROUNDS = [
-  { mode: "dark", name: "TradingView", bg: "#131722", grid: "rgba(42,46,57,0.85)", text: "#787b86" },
-  { mode: "dark", name: "Black", bg: "#0a0a0a", grid: "rgba(255,255,255,0.06)", text: "#9a968c" },
-  { mode: "dark", name: "Carbon", bg: "#0e1013", grid: "rgba(255,255,255,0.05)", text: "#9aa3ad" },
+  { mode: "dark", name: "Black", bg: "#000000", grid: "rgba(255,255,255,0.05)", text: "#787b86" },
+  { mode: "dark", name: "Carbon", bg: "#0b0b0c", grid: "rgba(255,255,255,0.05)", text: "#9aa3ad" },
+  { mode: "dark", name: "Graphite", bg: "#131316", grid: "rgba(255,255,255,0.06)", text: "#9a9ea8" },
   { mode: "dark", name: "Charcoal", bg: "#171717", grid: "rgba(255,255,255,0.07)", text: "#a8a49a" },
   { mode: "light", name: "White", bg: "#ffffff", grid: "rgba(42,46,57,0.08)", text: "#5d6676" },
   { mode: "light", name: "Warm", bg: "#fbfaf7", grid: "rgba(60,50,30,0.08)", text: "#6b6557" },

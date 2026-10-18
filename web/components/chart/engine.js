@@ -12,9 +12,9 @@ export const TOOLS = {
 };
 const FIB = [0, 0.236, 0.382, 0.5, 0.618, 0.705, 0.786, 1, 1.272, 1.618];
 const FIB_COL = ["#9aa7bd", "#ef5350", "#ff9800", "#4caf50", "#26a69a", "#2fb5d6", "#f0b90b", "#9aa7bd", "#9b7bff", "#e91e63"];
-// TradingView dark palette: chart #131722, axis text #787b86, candles #089981 / #f23645.
+// TradingView dark palette: chart #000000, axis text #787b86, candles #089981 / #f23645.
 const DEFAULT_THEME = {
-  bg: "#131722", grid: "rgba(42,46,57,0.85)", text: "#787b86", crosshair: "#758696",
+  bg: "#000000", grid: "rgba(42,46,57,0.85)", text: "#787b86", crosshair: "#758696",
   up: "#089981", down: "#f23645", wickUp: "#089981", wickDown: "#f23645", borderUp: "#089981", borderDown: "#f23645",
   line: "#2962ff", axisLine: "#2a2e39", font: "IBM Plex Sans, system-ui, -apple-system, Segoe UI, sans-serif",
   label: "#2a3a5c", ma20: "rgba(255,255,255,0.55)", ma50: "rgba(255,213,79,0.75)", ma200: "rgba(155,123,255,0.95)",

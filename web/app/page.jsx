@@ -77,8 +77,8 @@ export default function Landing() {
         )}
       </nav>
 
-      <header className="container lp-hero">
-        <div className="lp-hero-copy">
+      <header className="container lp-hero2">
+        <div className="lp-hero2-copy">
           <p className="eyebrow">Chart analysis for crypto, forex, metals, indices and stocks</p>
           <h1 className="lp-h1">Read any chart with an analyst beside you.</h1>
           <p className="lp-lead">
@@ -97,7 +97,7 @@ export default function Landing() {
             <li><Icon name="check" size={15} /> Built by Streixcorp</li>
           </ul>
         </div>
-        <div className="lp-terminal" aria-label="Live chart preview">
+        <div className="lp-terminal lp-window" aria-label="Live chart preview">
           <div className="lp-term-bar">
             <span className="lp-term-sym">BTCUSDT</span>
             <span className="lp-term-tf">1h</span>

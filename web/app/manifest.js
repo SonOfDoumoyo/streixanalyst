@@ -5,8 +5,8 @@ export default function manifest() {
     description: "The AI analyst that reads the chart with you.",
     start_url: "/terminal",
     display: "standalone",
-    background_color: "#131722",
-    theme_color: "#131722",
+    background_color: "#000000",
+    theme_color: "#000000",
     orientation: "any",
     icons: [
       { src: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
