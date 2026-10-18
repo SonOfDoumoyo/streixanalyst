@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import Brand from "@/components/Brand";
+import SubNav from "@/components/SubNav";
 import Icon from "@/components/Icons";
 import { ExperiencePicker } from "@/components/AuthForms";
 import { useAuth } from "@/components/Providers";
@@ -162,19 +162,15 @@ function SettingsInner() {
   const setC = (k, v) => updateSettings({ candles: { [k]: v } });
   return (
     <div className="page page-bg">
-      <nav className="nav">
-        <Brand />
-        <div className="grow" />
-        <Link className="btn" href="/terminal"><Icon name="candles" size={16} /> Terminal</Link>
-      </nav>
-      <main className="container" style={{ paddingBottom: 60 }}>
+      <SubNav />
+      <main className="container tv-flat" style={{ paddingBottom: 60 }}>
         <h1 className="h-display" style={{ fontSize: "clamp(1.8rem, 3.4vw, 2.4rem)", margin: "10px 0 22px" }}>Settings</h1>
         <div className="shell">
           <div className="side-nav">
             {SECTIONS.map(([id, label, ic]) => (
               <button key={id} className={sec === id ? "on" : ""} onClick={() => { setSec(id); window.history.replaceState(null, "", `#${id}`); }}><Icon name={ic} size={17} /> {label}</button>
             ))}
-            <Link href="/billing" className="btn ghost" style={{ justifyContent: "flex-start" }}><Icon name="card" size={17} /> Plan & billing</Link>
+            <Link href="/billing" className="side-link"><Icon name="card" size={17} /> Plan & billing</Link>
           </div>
           <div className="stack">
             {sec === "profile" ? (

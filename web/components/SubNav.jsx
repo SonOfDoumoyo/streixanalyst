@@ -75,9 +75,9 @@ export default function SubNav({ children, mobile, bell = null }) {
     <header className="topbar">
       {mobile ? <Link href="/" aria-label="Home"><Mark size={34} /></Link> : <Brand href="/" size={34} compact={!wide} />}
       <span className="sep hide-mobile" />
-      <nav className="row hide-mobile" style={{ gap: 2 }}>
+      <nav className="topnav hide-mobile">
         {APP_LINKS.map(([href, label, ic]) => (
-          <Link key={href} href={href} className={`btn sm ${path === href ? "" : "ghost"}`} style={path === href ? { borderColor: "var(--brand)", color: "var(--brand-2)" } : undefined}>
+          <Link key={href} href={href} className={`tv-tab${path === href ? " on" : ""}`}>
             <Icon name={ic} size={15} /> {label}
           </Link>
         ))}

@@ -17,11 +17,14 @@ export const EXPERIENCE = [
 export function AuthShell({ children }) {
   return (
     <div className="page page-bg">
-      <nav className="nav">
-        <Brand />
+      <header className="topbar">
+        <Brand href="/" size={34} />
+        <span className="sep" />
+        <nav className="topnav">
+          <Link href="/pricing" className="tv-tab">Pricing</Link>
+        </nav>
         <div className="grow" />
-        <Link href="/pricing" className="btn ghost sm">Pricing</Link>
-      </nav>
+      </header>
       <div className="auth-wrap">{children}</div>
     </div>
   );

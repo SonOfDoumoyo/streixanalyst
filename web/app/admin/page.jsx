@@ -1,7 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
-import Brand from "@/components/Brand";
+import SubNav from "@/components/SubNav";
 import Icon from "@/components/Icons";
 import { useAuth } from "@/components/Providers";
 import { Field, Modal, RequireAuth, Spinner } from "@/components/ui";
@@ -477,13 +476,8 @@ function AdminInner() {
   const [tab, setTab] = useState("overview");
   return (
     <div className="page page-bg">
-      <nav className="nav">
-        <Brand />
-        <span className="badge brand">Admin</span>
-        <div className="grow" />
-        <Link className="btn" href="/terminal"><Icon name="candles" size={16} /> Terminal</Link>
-      </nav>
-      <main className="container" style={{ paddingBottom: 60, maxWidth: 1360 }}>
+      <SubNav><span className="badge brand">Admin</span></SubNav>
+      <main className="container tv-flat" style={{ paddingTop: 28, paddingBottom: 60, maxWidth: 1360 }}>
         <div className="shell">
           <div className="side-nav">
             {TABS.map(([id, l, ic]) => <button key={id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}><Icon name={ic} size={17} /> {l}</button>)}

@@ -416,18 +416,16 @@ export default function Terminal() {
 
   const panelContent = (
     <>
-      <div className="tabs" role="tablist">
-        {TABS.map(([id, label, icon]) => (
-          <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>
-            <Icon name={icon} /> <span>{label}</span>
-          </button>
-        ))}
-        {narrow ? (
+      {narrow ? (
+        <div className="tabs" role="tablist">
+          {TABS.map(([id, label, icon]) => (
+            <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>
+              <Icon name={icon} /> <span>{label}</span>
+            </button>
+          ))}
           <button onClick={() => setPanelOpen(false)} aria-label="Close panel" style={{ flex: "none", width: 40 }}><Icon name="x" /></button>
-        ) : (
-          <button onClick={() => setPanelHidden(true)} aria-label="Hide panel" title="Hide panel" style={{ flex: "none", width: 30, padding: 0 }}><Icon name="chevronRight" /></button>
-        )}
-      </div>
+        </div>
+      ) : null}
       <div className={`panel-body ${tab === "ai" || tab === "watchlist" ? "flush" : ""}`} style={tab === "ai" ? { overflow: "hidden", display: "flex", flexDirection: "column" } : undefined}>
         {tab === "analysis" ? (
           <AnalysisPanel res={res} busy={busy} step={step} steps={ANALYSIS_STEPS} onAnalyse={analyse} onAsk={ask} onUpgrade={() => setPaywall({ message: "Upgrade to Pro for both report styles and the model statistics." })}
@@ -448,7 +446,7 @@ export default function Terminal() {
   );
 
   return (
-    <div className="term" data-tv={scale > 1 ? "1" : undefined}>
+    <div className={`term${narrow ? "" : " term-desk"}`} data-tv={scale > 1 ? "1" : undefined}>
       <header className="topbar">
         {mobile ? <Link href="/" aria-label="Home"><Mark size={34} /></Link> : <Brand href="/" size={34} compact={width < 1300} />}
         {!mobile ? <span className="sep" /> : null}
@@ -677,7 +675,34 @@ export default function Terminal() {
         <aside className={`rpanel ${panelVisible ? "open" : ""}`} aria-label="Analysis and tools" style={!narrow && panelHidden ? { display: "none" } : undefined}>
           {panelContent}
         </aside>
+        {!narrow ? (
+          <nav className="widget-bar" aria-label="Panels">
+            {TABS.map(([id, label, icon]) => {
+              const on = tab === id && !panelHidden;
+              return (
+                <button key={id} title={label} aria-label={label} aria-pressed={on} className={on ? "on" : ""}
+                  onClick={() => { if (on) setPanelHidden(true); else { setTab(id); setPanelHidden(false); } }}>
+                  <Icon name={icon} size={18} />
+                </button>
+              );
+            })}
+            <span className="grow" />
+            <button title={panelHidden ? "Show panel" : "Hide panel"} aria-label={panelHidden ? "Show panel" : "Hide panel"} onClick={() => setPanelHidden(!panelHidden)}>
+              <Icon name={panelHidden ? "chevronLeft" : "chevronRight"} size={16} />
+            </button>
+          </nav>
+        ) : null}
       </div>
+
+      {!narrow ? (
+        <footer className="term-status">
+          <span className="live-dot" style={replay ? { background: "var(--warn)" } : undefined} />
+          <span>{replay ? `Replay · ${utcLabel(replay.at)}` : "Live"}</span>
+          {meta ? <span className="faint">{meta.source}</span> : null}
+          <span className="grow" />
+          <span className="faint">{display} · {TF_LABEL[tf]}</span>
+        </footer>
+      ) : null}
 
       {mobile ? (
         <nav className="bottom-nav" aria-label="Sections">

@@ -1,8 +1,7 @@
 "use client";
 import { Suspense, useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import Brand from "@/components/Brand";
+import SubNav from "@/components/SubNav";
 import Icon from "@/components/Icons";
 import PricingCards, { MonthsToggle, usePlans } from "@/components/Pricing";
 import { useAuth } from "@/components/Providers";
@@ -344,12 +343,8 @@ function BillingInner() {
     : e.tier === "admin" ? "Admin — everything unlocked" : "Free plan";
   return (
     <div className="page page-bg">
-      <nav className="nav">
-        <Brand />
-        <div className="grow" />
-        <Link className="btn" href="/terminal"><Icon name="candles" size={16} /> Terminal</Link>
-      </nav>
-      <main className="container stack" style={{ gap: 22, paddingBottom: 60 }}>
+      <SubNav />
+      <main className="container stack tv-flat" style={{ gap: 22, paddingTop: 28, paddingBottom: 60 }}>
         <div>
           <div className="eyebrow">Plan & billing</div>
           <h1 className="h-display" style={{ fontSize: "clamp(1.8rem, 3.6vw, 2.6rem)", margin: "8px 0 4px" }}>{status}</h1>
