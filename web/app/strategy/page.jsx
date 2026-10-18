@@ -252,7 +252,7 @@ function StrategyInner() {
         if (L.signal && Number.isFinite(L.stop)) {
           const t2 = L.time + 30 * step;
           const ln = (id, p, color, label) => ({ id, layer: "plan", kind: "line", order: 9, prio: 1, t1: L.time, t2, p1: p, p2: p, color, width: 1.6, text: label, axisTag: true });
-          items.push(ln("ent", L.entry, "#e8a287", `Entry ${fmtPrice(L.entry, d.decimals)}`));
+          items.push(ln("ent", L.entry, "#2962ff", `Entry ${fmtPrice(L.entry, d.decimals)}`));
           items.push(ln("stp", L.stop, "#ff5d7a", `Stop ${fmtPrice(L.stop, d.decimals)}`));
           items.push(ln("tgt", L.target, "#2fd3a6", `Target ${fmtPrice(L.target, d.decimals)}`));
         }

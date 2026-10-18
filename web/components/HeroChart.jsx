@@ -51,7 +51,7 @@ export default function HeroChart() {
     const show = (rows, decimals, label) => {
       const e = eng.current;
       if (!e || !alive) return;
-      e.setTheme({ bg: "#071026" });
+      e.setTheme({ bg: "#131722" });
       e.setOptions({ volume: true, watermark: true, indicators: { ema50: true, ema200: false, ema20: false } });
       e.setData(rows, { tfSec: rows.length > 1 ? rows[1][0] - rows[0][0] : 3600, decimals, label });
       setTimeout(() => e.setAnalysis(sketch(rows), { animate: true, pins: [] }), 500);

@@ -24,7 +24,7 @@ const BIAS_WORD = { long: "Bullish", short: "Bearish", neutral: "No clear direct
 function ScoreRing({ score, grade }) {
   const r = 52;
   const c = 2 * Math.PI * r;
-  const col = score >= 70 ? "#2fd3a6" : score >= 55 ? "#e8a287" : score >= 40 ? "#f5b342" : "#ff6b6b";
+  const col = score >= 70 ? "#2fd3a6" : score >= 55 ? "#2962ff" : score >= 40 ? "#f5b342" : "#ff6b6b";
   return (
     <div style={{ position: "relative", width: 132, height: 132, flex: "none" }}>
       <svg viewBox="0 0 132 132" width="132" height="132" style={{ transform: "rotate(-90deg)" }}>

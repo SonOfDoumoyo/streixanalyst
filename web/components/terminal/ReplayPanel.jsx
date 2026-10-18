@@ -3,6 +3,8 @@
 // Until you reveal, the chart stops at that moment. Calls are scored the same way as the verified track record.
 import { useEffect, useState } from "react";
 import { post } from "@/lib/api";
+import { verdictTone } from "@/lib/analysis";
+import PlanLadder from "@/components/terminal/PlanLadder";
 
 const AHEAD = 200;                       // candles of "what happened next" the chart shows after a reveal
 const NO_CALL = { side: "", entry: "", sl: "", tp: "" };
@@ -17,6 +19,7 @@ const WORDS = {
   pending: "Waiting for a fill",
   unknown: "Not enough data yet",
 };
+const TONE_OF_VERDICT = { buy: "up", sell: "down", wait: "warn" };
 
 // a Date as the value a datetime-local input takes (in local time)
 function localInput(d) {
@@ -28,25 +31,35 @@ function utcText(iso) {
   return iso ? `${iso.replace("T", " ").slice(0, 16)} UTC` : "";
 }
 
-function px(x, dec = 2) {
-  if (x === null || x === undefined || Number.isNaN(Number(x))) return "–";
-  return Number(x).toLocaleString(undefined, { maximumFractionDigits: dec });
+// One card: a heading row with a status badge, the big result, and the trade drawn as a ladder.
+function Card({ title, tone = "", badge, children }) {
+  return (
+    <div className="replay-card">
+      <div className="replay-head">
+        <span className="faint" style={{ fontSize: "0.8rem" }}>{title}</span>
+        {badge ? <span className={`badge ${tone}`}>{badge}</span> : null}
+      </div>
+      {children}
+    </div>
+  );
 }
 
-function Outcome({ label, o, dec }) {
+// How a finished or running trade ended, as a card: the result in R after costs and the levels it was played on.
+function OutcomeCard({ title, o, dec }) {
   if (!o) return null;
+  const tone = o.status === "tp" ? "up" : o.status === "sl" ? "down" : o.status === "open" || o.status === "pending" ? "warn" : "";
+  const side = o.side === "long" ? "Long" : o.side === "short" ? "Short" : "";
   return (
-    <div className="card" style={{ padding: 10, display: "flex", flexDirection: "column", gap: 4 }}>
-      <div className="faint" style={{ fontSize: "0.78rem" }}>{label}</div>
-      <div>
-        <b>{WORDS[o.status] || o.status}</b>
-        {typeof o.r === "number" ? <span className="num"> · {o.r >= 0 ? "+" : ""}{o.r.toFixed(2)} R after costs</span> : null}
-      </div>
-      <div className="hint num" style={{ fontSize: "0.78rem" }}>
-        {o.side} · entry {px(o.entry, dec)} · stop {px(o.sl, dec)} · target {px(o.tp, dec)}
-        {o.filled_at ? ` · filled ${utcText(o.filled_at)}` : ""}
-      </div>
-    </div>
+    <Card title={`${title}${side ? ` · ${side}` : ""}`} tone={tone} badge={WORDS[o.status] || o.status}>
+      {typeof o.r === "number" ? (
+        <div className="replay-r num">
+          <span className={o.r >= 0 ? "up" : "down"}>{o.r >= 0 ? "+" : ""}{o.r.toFixed(2)}R</span>
+          <span className="faint" style={{ fontSize: "0.8rem", fontWeight: 500 }}> after costs</span>
+        </div>
+      ) : null}
+      {o.entry ? <PlanLadder p={{ entry: o.entry, sl: o.sl, tps: o.tp ? [o.tp] : [], rr: [] }} dec={dec} /> : null}
+      {o.filled_at ? <div className="hint num" style={{ marginTop: 8 }}>Filled {utcText(o.filled_at)}</div> : null}
+    </Card>
   );
 }
 
@@ -140,15 +153,11 @@ export default function ReplayPanel({ symbol, tf, replay, setReplay }) {
             </div>
           ) : (
             <>
-              <div className="card" style={{ padding: 10, display: "flex", flexDirection: "column", gap: 4 }}>
-                <div className="faint" style={{ fontSize: "0.78rem" }}>What the analyst saw</div>
-                <div>{verdict.headline || verdict.action || "No verdict"}</div>
-                {plan ? (
-                  <div className="num" style={{ fontSize: "0.85rem" }}>
-                    {plan.side} · entry {px(plan.entry, dec)} · stop {px(plan.sl, dec)} · target {px(plan.tps && plan.tps[0], dec)}
-                  </div>
-                ) : <div className="hint">The analyst didn&apos;t call a trade here.</div>}
-              </div>
+              <Card title="What the analyst saw" tone={TONE_OF_VERDICT[verdictTone(verdict)]}
+                badge={verdict.action || "No verdict"}>
+                {verdict.headline ? <div className="muted" style={{ fontSize: "0.88rem" }}>{verdict.headline}</div> : null}
+                {plan ? <PlanLadder p={plan} dec={dec} /> : <div className="hint">The analyst didn&apos;t call a trade here.</div>}
+              </Card>
 
               <div className="stack" style={{ gap: 8 }}>
                 <div className="label">Your call (optional)</div>
@@ -175,9 +184,9 @@ export default function ReplayPanel({ symbol, tf, replay, setReplay }) {
               ) : null}
 
               {result ? (
-                <div className="stack" style={{ gap: 8 }}>
-                  <Outcome label="Analyst" o={result.analyst} dec={dec} />
-                  <Outcome label="Your call" o={result.user} dec={dec} />
+                <div className="stack" style={{ gap: 10 }}>
+                  <OutcomeCard title="Analyst" o={result.analyst} dec={dec} />
+                  <OutcomeCard title="Your call" o={result.user} dec={dec} />
                   {!result.final ? <div className="hint">Not finished yet. Reveal again later to see the rest.</div> : null}
                 </div>
               ) : null}

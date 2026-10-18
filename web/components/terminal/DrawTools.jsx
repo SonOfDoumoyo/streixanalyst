@@ -82,21 +82,21 @@ function ToolButton({ group, cur, active, onPick }) {
   );
 }
 
-const SWATCHES = ["#e8a287", "#2fd3a6", "#ef5350", "#f5b342", "#9b7bff", "#ff6bd6", "#e8eef9", "#8fa1c4"];
+const SWATCHES = ["#2962ff", "#2fd3a6", "#ef5350", "#f5b342", "#9b7bff", "#ff6bd6", "#e8eef9", "#8fa1c4"];
 
 export function StyleBar({ drawing, onStyle, onDelete, onClone, onLock, onReview, onEditText }) {
   if (!drawing) return null;
   const st = drawing.style || {};
   const isLine = ["trendline", "ray", "extline", "arrow", "hline", "hray", "vline", "channel"].includes(drawing.type);
   const canExtend = ["trendline", "rect", "fib"].includes(drawing.type);
-  const color = st.color || "#e8a287";
+  const color = st.color || "#2962ff";
   return (
     <div className="style-bar glass" role="toolbar" aria-label="Drawing style">
       {SWATCHES.map((c) => (
         <button key={c} className={`swatch ${color.toLowerCase() === c ? "on" : ""}`} style={{ background: c }} aria-label={`Colour ${c}`}
           onClick={() => onStyle({ color: c, ...(drawing.type === "rect" ? { fill: undefined } : {}) })} />
       ))}
-      <input type="color" className="color-input" value={/^#[0-9a-f]{6}$/i.test(color) ? color : "#e8a287"} aria-label="Custom colour"
+      <input type="color" className="color-input" value={/^#[0-9a-f]{6}$/i.test(color) ? color : "#2962ff"} aria-label="Custom colour"
         onChange={(e) => onStyle({ color: e.target.value, ...(drawing.type === "rect" ? { fill: undefined } : {}) })} />
       {isLine || drawing.type === "rect" ? (
         <>

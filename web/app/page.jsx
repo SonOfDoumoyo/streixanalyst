@@ -5,28 +5,42 @@ import Brand from "@/components/Brand";
 import Icon from "@/components/Icons";
 import HeroChart from "@/components/HeroChart";
 import PricingCards, { MonthsToggle, usePlans } from "@/components/Pricing";
+import PlanLadder from "@/components/terminal/PlanLadder";
 import { useAuth } from "@/components/Providers";
 
-const FEATURES = [
-  ["zap", "It draws the analysis for you", "Press Analyse and watch it mark structure, liquidity, order blocks, fair value gaps, key levels and a full plan — entry, stop, targets — right on the chart."],
-  ["globe", "Any market, any timeframe", "Bitcoin to brand-new listings like CAPUSDT, forex, gold, oil, indices and US stocks. One minute to one month."],
-  ["sparkles", "StreixAI, your coach", "Ask why. StreixAI explains the setup at your level — beginner, intermediate or advanced — and teaches the fundamentals as you go."],
-  ["news", "News-aware", "Every analysis checks the economic calendar and the latest headlines, and warns you before CPI, NFP or a rate decision hits."],
-  ["target", "Draw & score", "Mark your own levels, trendlines and trade, call the bias, and the analyst scores you out of 100: the levels you missed are drawn on the chart and StreixAI coaches you. Daily challenge and leaderboard."],
-  ["sliders", "Your strategy, tested honestly", "Describe your rules in plain words. The strategy lab backtests them with next-candle entries and real costs, and shows whether they're firing right now."],
-  ["bell", "Alerts that wait for you", "Price, level and plan alerts, plus strategy alerts on every closed candle, in the app, your browser and by email."],
-  ["shield", "A track record you can check", "Every trade call is followed on live prices until it wins, loses or expires. The results are public, losses included."],
-  ["users", "Built for teaching", "Organizations pay per person, so you only pay for the people on your team. Class codes, email invites and a TV / presentation mode for the big screen."],
+// How it works is a real sequence, so it is numbered.
+const STEPS = [
+  ["Pick a market", "Search any symbol on any exchange and choose a timeframe, from one minute to one month."],
+  ["Press Analyse", "The analyst reads the higher timeframes, the structure, the liquidity and the news, then draws each step on your chart."],
+  ["Trade it, or learn from it", "You get the entry, stop and targets, the odds against break-even, your position size and a safe leverage. Ask StreixAI about anything on the chart."],
+];
+
+// Features are a ledger: one line each, so they can be scanned like a watchlist.
+const LEDGER = [
+  ["Analysis on the chart", "Structure, liquidity, order blocks, fair value gaps, key levels and a full plan, drawn where they happen."],
+  ["Any market", "Bitcoin and new listings, forex, gold, oil, indices and US stocks. One minute to one month."],
+  ["StreixAI, your coach", "Ask why. The explanation fits your level, from beginner to advanced, and teaches the basics as you go."],
+  ["News aware", "Each analysis checks the economic calendar and the headlines, and warns you before CPI, NFP or a rate decision."],
+  ["Draw and score", "Mark your own levels and trade. The analyst scores your call out of 100 and draws what you missed."],
+  ["Strategy lab", "Describe your rules in plain words. Backtests enter on the next candle and charge real costs, and show whether the rules fire now."],
+  ["Alerts", "Price, level and plan alerts, plus strategy alerts on every closed candle, in the app, in the browser and by email."],
+  ["A track record you can check", "Every call is followed on live prices until it wins, loses or expires. The results are public, losses included."],
+  ["Built for teaching", "Class codes, email invites and a presentation mode for the big screen. Organizations pay per person on the team."],
 ];
 
 const FAQ = [
-  ["Is this financial advice?", "No. StreixAnalyst is an analysis and education tool. It shows what the chart says, how often similar setups worked historically, and the risks — the decision and the money are always yours."],
-  ["How accurate are the probabilities?", "They come from models trained on years of price history and tested on data they never saw. They are calibrated estimates, not promises — and the app tells you plainly when testing hasn't proven an edge."],
+  ["Is this financial advice?", "No. StreixAnalyst is an analysis and education tool. It shows what the chart says, how often similar setups worked historically, and the risks. The decision and the money are always yours."],
+  ["How accurate are the probabilities?", "They come from models trained on years of price history and tested on data they never saw. They are calibrated estimates, not promises, and the app tells you plainly when testing hasn't proven an edge."],
   ["Which markets can I analyse?", "Crypto from Binance, Bybit, OKX, KuCoin, MEXC, Gate and Coinbase (spot and perpetuals), plus forex, metals, energies, indices and US stocks."],
   ["How do I pay?", "Card, bank transfer and USSD through Paystack, OPay checkout, your own personal account number, or a direct transfer to our OPay or UBA account. Every payment is verified before your plan unlocks."],
   ["Can I see how the analyst's calls have actually done?", "Yes. The public track record follows every trade call on live prices with fixed rules (no edits, duplicates counted once) and shows wins, losses, the average result after costs and whether the grades hold up."],
-  ["What happens after the 30-day trial?", "You keep a free plan with charts, drawing tools and a few analyses a day. Upgrade to Pro whenever you want more."],
+  ["What happens after the trial?", "You keep a free plan with charts, drawing tools and a few analyses a day. Upgrade to Pro whenever you want more."],
 ];
+
+// Example numbers for the odds block. They are illustrative and labelled as an example on the page.
+const EXAMPLE_PLAN = {
+  side: "long", type: "pullback", entry: 76410.5, sl: 75620, tps: [77650, 78900], rr: [1.57, 3.15],
+};
 
 export default function Landing() {
   const { user, config } = useAuth();
@@ -39,14 +53,15 @@ export default function Landing() {
     return () => window.removeEventListener("scroll", f);
   }, []);
   const days = (config && config.trial_days) || 30;
+  const primaryHref = user ? "/terminal" : "/signup";
   return (
-    <div className="page page-bg enter">
+    <div className="page page-bg enter lp">
       {config && config.announcement ? <div className="banner">{config.announcement}</div> : null}
       <nav className={`nav ${scrolled ? "scrolled" : ""}`}>
         <Brand />
         <div className="nav-links">
-          <a href="#features">Features</a>
           <a href="#how">How it works</a>
+          <a href="#features">Features</a>
           <a href="#pricing">Pricing</a>
           <Link href="/track-record">Track record</Link>
           <a href="#faq">FAQ</a>
@@ -62,93 +77,137 @@ export default function Landing() {
         )}
       </nav>
 
-      <header className="container hero">
-        <div className="eyebrow">AI chart analysis · crypto · forex · gold · indices · stocks</div>
-        <h1 className="h-display gradient-text">The AI analyst that reads the chart with you.</h1>
-        <p className="lead">
-          Pick any pair. Press <b>Analyse</b>. StreixAnalyst maps the structure, the liquidity and the key levels, checks the news, and draws a
-          complete trade plan — with honest odds, position size and the right leverage. Then StreixAI explains every step.
-        </p>
-        <div className="row wrap" style={{ gap: 12, marginTop: 26 }}>
-          <Link className="btn primary lg" href={user ? "/terminal" : "/signup"}><Icon name="zap" size={18} /> {user ? "Open my terminal" : `Start free — ${days} days, everything unlocked`}</Link>
-          <a className="btn lg" href="#how">See how it works</a>
+      <header className="container lp-hero">
+        <div className="lp-hero-copy">
+          <p className="eyebrow">Chart analysis for crypto, forex, metals, indices and stocks</p>
+          <h1 className="lp-h1">Read any chart with an analyst beside you.</h1>
+          <p className="lp-lead">
+            Pick a market and press Analyse. StreixAnalyst marks the structure, the liquidity and the key levels, checks the news,
+            and drafts a complete trade plan: entry, stop, targets, position size and a safe leverage. StreixAI explains every step.
+          </p>
+          <div className="row wrap lp-cta">
+            <Link className="btn primary lg" href={primaryHref}>
+              <Icon name="zap" size={18} /> {user ? "Open my terminal" : `Start free, ${days} days`}
+            </Link>
+            <a className="btn lg" href="#how">See how it works</a>
+          </div>
+          <ul className="lp-facts">
+            <li><Icon name="check" size={15} /> No card needed</li>
+            <li><Icon name="check" size={15} /> Works on phone, desktop and TV</li>
+            <li><Icon name="check" size={15} /> Built by Streixcorp</li>
+          </ul>
         </div>
-        <div className="row wrap faint" style={{ gap: 18, marginTop: 18, fontSize: "0.86rem" }}>
-          <span className="row" style={{ gap: 6 }}><Icon name="check" size={15} style={{ color: "var(--up)" }} /> No card needed</span>
-          <span className="row" style={{ gap: 6 }}><Icon name="check" size={15} style={{ color: "var(--up)" }} /> Works on phone, desktop and TV</span>
-          <span className="row" style={{ gap: 6 }}><Icon name="check" size={15} style={{ color: "var(--up)" }} /> Built by Streixcorp</span>
+        <div className="lp-terminal" aria-label="Live chart preview">
+          <div className="lp-term-bar">
+            <span className="lp-term-sym">BTCUSDT</span>
+            <span className="lp-term-tf">1h</span>
+          </div>
+          <HeroChart />
         </div>
-        <HeroChart />
       </header>
 
-      <section className="section container" id="how">
-        <div className="eyebrow">How it works</div>
-        <h2 className="h-display" style={{ fontSize: "clamp(1.8rem, 3.4vw, 2.6rem)", margin: "10px 0 28px" }}>From any chart to a clear plan in seconds</h2>
-        <div className="features">
-          {[["search", "1. Pick a market", "Search any symbol on any exchange and choose your timeframe — from 1 minute to 1 month."],
-            ["zap", "2. Press Analyse", "The analyst reads the higher timeframes, structure, liquidity and news, then draws everything on your chart, step by step."],
-            ["target", "3. Trade it — or learn from it", "Get entry, stop, targets, the odds versus break-even, your position size and safe leverage. Ask StreixAI anything."]].map(([ic, t, d]) => (
-            <div key={t} className="card feature">
-              <div className="ico"><Icon name={ic} size={22} /></div>
-              <h3>{t}</h3>
-              <p>{d}</p>
-            </div>
-          ))}
+      <section className="lp-section" id="how">
+        <div className="container">
+          <p className="eyebrow">How it works</p>
+          <h2 className="lp-h2">From any chart to a clear plan in three steps</h2>
+          <ol className="lp-steps">
+            {STEPS.map(([t, d], i) => (
+              <li key={t} className="lp-step">
+                <span className="lp-step-n num">{i + 1}</span>
+                <h3>{t}</h3>
+                <p>{d}</p>
+              </li>
+            ))}
+          </ol>
         </div>
       </section>
 
-      <section className="section container" id="features" style={{ paddingTop: 0 }}>
-        <div className="eyebrow">Features</div>
-        <h2 className="h-display" style={{ fontSize: "clamp(1.8rem, 3.4vw, 2.6rem)", margin: "10px 0 28px" }}>Everything a serious trader needs. Nothing robotic.</h2>
-        <div className="features">
-          {FEATURES.map(([ic, t, d]) => (
-            <div key={t} className="card feature">
-              <div className="ico"><Icon name={ic} size={22} /></div>
-              <h3>{t}</h3>
-              <p>{d}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="section container narrow" style={{ paddingTop: 0 }}>
-        <div className="card" style={{ padding: "28px 26px" }}>
-          <div className="eyebrow">Odds, not hype</div>
-          <h2 className="h-display" style={{ fontSize: "clamp(1.5rem, 2.8vw, 2rem)", margin: "10px 0 12px" }}>We show you the maths — including when it says “don't trade”.</h2>
-          <p className="muted" style={{ margin: 0 }}>
-            Every plan shows the chance price hits the target before the stop, next to the win rate you'd need to break even after costs. When the odds
-            aren't there, the verdict is <b>NO TRADE</b> with a conditional plan — because sitting out is a position too. No guarantees, no fake win rates.
-          </p>
-        </div>
-      </section>
-
-      <section className="section container" id="pricing" style={{ paddingTop: 0 }}>
-        <div className="row wrap" style={{ justifyContent: "space-between", marginBottom: 24, gap: 14 }}>
+      <section className="lp-section" id="features">
+        <div className="container lp-split">
           <div>
-            <div className="eyebrow">Pricing</div>
-            <h2 className="h-display" style={{ fontSize: "clamp(1.8rem, 3.4vw, 2.6rem)", margin: "10px 0 0" }}>Start with {days} days of everything</h2>
+            <p className="eyebrow">Features</p>
+            <h2 className="lp-h2">Everything on the chart, in one place</h2>
+            <p className="lp-body">
+              The analysis, the coaching, the news and your own practice share one chart. Nothing needs a second window.
+            </p>
           </div>
-          <MonthsToggle months={months} setMonths={setMonths} plans={plans} />
-        </div>
-        <PricingCards plans={plans} months={months} />
-      </section>
-
-      <section className="section container narrow" id="faq" style={{ paddingTop: 0 }}>
-        <div className="eyebrow">FAQ</div>
-        <h2 className="h-display" style={{ fontSize: "clamp(1.6rem, 3vw, 2.2rem)", margin: "10px 0 20px" }}>Questions, answered</h2>
-        <div className="stack" style={{ gap: 10 }}>
-          {FAQ.map(([q, a]) => (
-            <details key={q} className="fold">
-              <summary>{q} <Icon name="chevronDown" size={16} /></summary>
-              <div className="muted">{a}</div>
-            </details>
-          ))}
+          <dl className="lp-ledger">
+            {LEDGER.map(([t, d]) => (
+              <div key={t} className="lp-ledger-row">
+                <dt>{t}</dt>
+                <dd>{d}</dd>
+              </div>
+            ))}
+          </dl>
         </div>
       </section>
 
-      <section className="section container" style={{ textAlign: "center", paddingTop: 0 }}>
-        <h2 className="h-display gradient-text" style={{ fontSize: "clamp(2rem, 4vw, 3rem)", margin: "0 0 16px" }}>Your next chart deserves a second opinion.</h2>
-        <Link className="btn primary lg" href={user ? "/terminal" : "/signup"}><Icon name="zap" size={18} /> {user ? "Open my terminal" : "Start my free trial"}</Link>
+      <section className="lp-section">
+        <div className="container lp-split">
+          <div>
+            <p className="eyebrow">Odds</p>
+            <h2 className="lp-h2">We show the maths, including when it says don&apos;t trade</h2>
+            <p className="lp-body">
+              Every plan shows the chance that price reaches the target before the stop, next to the win rate you would need to break
+              even after costs. When the odds are not there, the verdict is <b>NO TRADE</b> with a conditional plan, because sitting out
+              is a position too. No guarantees, and no invented win rates.
+            </p>
+          </div>
+          <div className="lp-example">
+            <div className="lp-example-head">
+              <span className="faint">Example plan</span>
+              <span className="badge up">BUY pullback</span>
+            </div>
+            <PlanLadder p={EXAMPLE_PLAN} dec={2} />
+            <div className="lp-odds-bar">
+              <div className="row" style={{ justifyContent: "space-between", fontSize: "0.86rem" }}>
+                <span className="muted">Chance the target is hit first</span>
+                <span className="num" style={{ fontWeight: 700, color: "var(--good)" }}>41% vs 39% needed</span>
+              </div>
+              <div className="prob-bar" style={{ marginTop: 8 }}>
+                <i style={{ width: "41%" }} />
+                <b style={{ left: "39%" }} title="Break-even win rate" />
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="lp-section" id="pricing">
+        <div className="container">
+          <div className="row wrap lp-pricing-head">
+            <div>
+              <p className="eyebrow">Pricing</p>
+              <h2 className="lp-h2" style={{ margin: "8px 0 0" }}>Start with {days} days of everything</h2>
+            </div>
+            <MonthsToggle months={months} setMonths={setMonths} plans={plans} />
+          </div>
+          <div style={{ marginTop: 28 }}>
+            <PricingCards plans={plans} months={months} />
+          </div>
+        </div>
+      </section>
+
+      <section className="lp-section" id="faq">
+        <div className="container lp-faq">
+          <p className="eyebrow">FAQ</p>
+          <h2 className="lp-h2">Questions, answered</h2>
+          <div className="lp-faq-list">
+            {FAQ.map(([q, a]) => (
+              <details key={q} className="lp-faq-item">
+                <summary>{q} <Icon name="chevronDown" size={16} /></summary>
+                <div className="muted">{a}</div>
+              </details>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <section className="lp-section lp-final">
+        <div className="container">
+          <h2 className="lp-h2">Your next chart deserves a second opinion.</h2>
+          <Link className="btn primary lg" href={primaryHref}><Icon name="zap" size={18} /> {user ? "Open my terminal" : "Start my free trial"}</Link>
+        </div>
       </section>
 
       <footer className="footer">

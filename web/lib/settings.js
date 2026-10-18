@@ -26,7 +26,7 @@ export const DEFAULT_SETTINGS = {
   indicators: { ema20: false, ema50: true, ema200: true, bb: false, vwap: false },
   analysis: { detail: 1, animate: true, account: 1000, risk_pct: 1, leverage: "", mode: "auto", showAlt: false, directionView: "range" },
   layers: {},
-  drawingDefaults: { color: "#e8a287", width: 2, dash: "solid" },
+  drawingDefaults: { color: "#2962ff", width: 2, dash: "solid" },
   lastSymbol: "BTCUSDT",
   lastTf: "1h",
   tourDone: false, // the first-visit tour; set to true when it is finished or skipped

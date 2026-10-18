@@ -11,12 +11,12 @@ export const TOOLS = {
   measure: { pts: 2, label: "Measure" }, text: { pts: 1, label: "Text note" },
 };
 const FIB = [0, 0.236, 0.382, 0.5, 0.618, 0.705, 0.786, 1, 1.272, 1.618];
-const FIB_COL = ["#9aa7bd", "#ef5350", "#ff9800", "#4caf50", "#26a69a", "#2fb5d6", "#d97757", "#9aa7bd", "#9b7bff", "#e91e63"];
+const FIB_COL = ["#9aa7bd", "#ef5350", "#ff9800", "#4caf50", "#26a69a", "#2fb5d6", "#f0b90b", "#9aa7bd", "#9b7bff", "#e91e63"];
 // TradingView dark palette: chart #131722, axis text #787b86, candles #089981 / #f23645.
 const DEFAULT_THEME = {
   bg: "#131722", grid: "rgba(42,46,57,0.85)", text: "#787b86", crosshair: "#758696",
   up: "#089981", down: "#f23645", wickUp: "#089981", wickDown: "#f23645", borderUp: "#089981", borderDown: "#f23645",
-  line: "#2962ff", axisLine: "#2a2e39", font: "Inter, system-ui, -apple-system, Segoe UI, sans-serif",
+  line: "#2962ff", axisLine: "#2a2e39", font: "IBM Plex Sans, system-ui, -apple-system, Segoe UI, sans-serif",
   label: "#2a3a5c", ma20: "rgba(255,255,255,0.55)", ma50: "rgba(255,213,79,0.75)", ma200: "rgba(155,123,255,0.95)",
 };
 // grid is off by default (premium look); the user turns it on from the chart menu
@@ -629,7 +629,7 @@ export class ChartEngine {
     const tool = this.tool;
     const spec = TOOLS[tool];
     const pt = this._pt(x, y);
-    const def = this.drawingDefaults || { color: "#e8a287", width: 2, dash: "solid" };
+    const def = this.drawingDefaults || { color: "#2962ff", width: 2, dash: "solid" };
     if (!this.placing) {
       if (spec.pts === 1) {
         let d;
@@ -1493,7 +1493,7 @@ export class ChartEngine {
     tags.push({ y: this.y(k.c), text: this.fmt(k.c), bg: col, prio: 0, extra: cd ? this.fs + 4 : 0, last: true });
     const sd = this.selected();
     if (sd && sd.type !== "text" && sd.type !== "vline") {
-      for (const p of sd.points) tags.push({ y: this.y(p.p), text: this.fmt(p.p), bg: hexA(sd.style.color || "#e8a287", 0.9), prio: 1 });
+      for (const p of sd.points) tags.push({ y: this.y(p.p), text: this.fmt(p.p), bg: hexA(sd.style.color || "#2962ff", 0.9), prio: 1 });
     }
     if (this.ana) {
       for (const it of this.ana) {
@@ -1508,7 +1508,7 @@ export class ChartEngine {
     if (this.drawingsVisible) {
       for (const d of this.drawings) {
         if (d.hidden || (d.type !== "hline" && d.type !== "hray")) continue;
-        tags.push({ y: this.y(d.points[0].p), text: this.fmt(d.points[0].p), bg: d.style.color || "#e8a287", prio: 4 });
+        tags.push({ y: this.y(d.points[0].p), text: this.fmt(d.points[0].p), bg: d.style.color || "#2962ff", prio: 4 });
       }
     }
     tags.sort((a, b) => a.prio - b.prio);
@@ -1771,7 +1771,7 @@ export class ChartEngine {
         ctx.fillStyle = this.theme.bg;
         ctx.fill();
         ctx.lineWidth = 2;
-        ctx.strokeStyle = sd.style.color || "#e8a287";
+        ctx.strokeStyle = sd.style.color || "#2962ff";
         ctx.stroke();
       }
     }
@@ -1780,7 +1780,7 @@ export class ChartEngine {
   _drawOne(d) {
     const ctx = this.ctx;
     const st = d.style || {};
-    const col = st.color || "#e8a287";
+    const col = st.color || "#2962ff";
     const lw = (st.width || 2) * this.scale * 0.75;
     ctx.strokeStyle = col;
     ctx.fillStyle = col;
