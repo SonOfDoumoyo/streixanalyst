@@ -23,6 +23,7 @@ import NewsPanel from "./NewsPanel";
 import ReviewModal from "./ReviewModal";
 import DivergencePanel from "./DivergencePanel";
 import ReplayPanel from "./ReplayPanel";
+import { chartThemeFor } from "@/lib/chartTheme";
 
 const STYLES = [["candles", "Candles"], ["hollow", "Hollow candles"], ["heikin", "Heikin Ashi"], ["bars", "OHLC bars"], ["line", "Line"], ["area", "Area"]];
 const INDICATORS = [["ema20", "EMA 20"], ["ema50", "EMA 50"], ["ema200", "EMA 200"], ["bb", "Bollinger Bands"], ["vwap", "VWAP (intraday)"]];
@@ -89,11 +90,9 @@ export default function Terminal() {
   const replayRef = useRef(null);
   replayRef.current = replay;
 
-  const theme = useMemo(() => ({
-    bg: settings.chart.background, grid: settings.chart.gridColor, text: settings.chart.textColor, crosshair: settings.chart.crosshair,
-    up: settings.candles.up, down: settings.candles.down, wickUp: settings.candles.wickUp, wickDown: settings.candles.wickDown,
-    borderUp: settings.candles.borderUp, borderDown: settings.candles.borderDown,
-  }), [settings.chart, settings.candles]);
+  // the chart follows the app's light or dark mode (see lib/chartTheme.js)
+  const theme = useMemo(() => chartThemeFor(settings.theme, settings.chart, settings.candles),
+    [settings.theme, settings.chart, settings.candles]);
 
   // ───── engine wiring
   const onReady = useCallback((e) => {

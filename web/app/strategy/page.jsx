@@ -12,6 +12,7 @@ import SymbolSearch, { SymbolIcon } from "@/components/terminal/SymbolSearch";
 import { ApiError, del, get, post, put, qs } from "@/lib/api";
 import { cleanSymbol, fmtDate, fmtDateTime, fmtPct, fmtPrice } from "@/lib/format";
 import { localGet, localSet } from "@/lib/settings";
+import { chartThemeFor } from "@/lib/chartTheme";
 
 const TFS = ["5m", "15m", "1h", "4h", "1D"];
 const BARS = [[1000, "1,000"], [3000, "3,000"], [5000, "5,000"]];
@@ -142,11 +143,9 @@ function StrategyInner() {
   const meta = useRef(null);
   const resultsRef = useRef(null);
 
-  const theme = useMemo(() => ({
-    bg: settings.chart.background, grid: settings.chart.gridColor, text: settings.chart.textColor, crosshair: settings.chart.crosshair,
-    up: settings.candles.up, down: settings.candles.down, wickUp: settings.candles.wickUp, wickDown: settings.candles.wickDown,
-    borderUp: settings.candles.borderUp, borderDown: settings.candles.borderDown,
-  }), [settings.chart, settings.candles]);
+  // the chart follows the app's light or dark mode (see lib/chartTheme.js)
+  const theme = useMemo(() => chartThemeFor(settings.theme, settings.chart, settings.candles),
+    [settings.theme, settings.chart, settings.candles]);
 
   const fail = useCallback((e) => {
     if (e instanceof ApiError && (e.status === 402 || e.status === 429)) setPaywall({ message: e.message, detail: e.detail });

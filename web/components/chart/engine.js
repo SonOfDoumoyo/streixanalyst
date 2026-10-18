@@ -17,6 +17,7 @@ const DEFAULT_THEME = {
   bg: "#131722", grid: "rgba(42,46,57,0.85)", text: "#787b86", crosshair: "#758696",
   up: "#089981", down: "#f23645", wickUp: "#089981", wickDown: "#f23645", borderUp: "#089981", borderDown: "#f23645",
   line: "#2962ff", axisLine: "#2a2e39", font: "Inter, system-ui, -apple-system, Segoe UI, sans-serif",
+  label: "#2a3a5c", ma20: "rgba(255,255,255,0.55)", ma50: "rgba(255,213,79,0.75)", ma200: "rgba(155,123,255,0.95)",
 };
 // grid is off by default (premium look); the user turns it on from the chart menu
 const DEFAULT_OPTS = { style: "candles", volume: true, logScale: false, rsi: false, grid: false, watermark: true,
@@ -237,6 +238,8 @@ export class ChartEngine {
 
   fmt(p) {
     if (p === null || p === undefined || !Number.isFinite(p)) return "";
+    // large prices get thousands separators (99,500.00), so they read at a glance
+    if (Math.abs(p) >= 1000) return p.toLocaleString("en-US", { minimumFractionDigits: this.dec, maximumFractionDigits: this.dec });
     return p.toFixed(this.dec);
   }
 
@@ -1129,6 +1132,7 @@ export class ChartEngine {
     if (this.ana) this._drawAnalysis("above");
     if (this.drawingsVisible) this._drawUserDrawings();
     this._drawLastLine();
+    this._drawLastDot();
     this._drawCrosshair();
     ctx.restore();
     if (this.opts.rsi) this._drawRsi(i0, i1);
@@ -1323,9 +1327,9 @@ export class ChartEngine {
       this._line(I.bb.lo, i0, i1, "rgba(155,123,255,0.65)", 1);
       this._line(I.bb.mid, i0, i1, "rgba(155,123,255,0.35)", 1, [4, 4]);
     }
-    if (on.ema20) this._line(I.ema20, i0, i1, "rgba(255,255,255,0.55)", 1.1);
-    if (on.ema50) this._line(I.ema50, i0, i1, "rgba(255,213,79,0.75)", 1.2);
-    if (on.ema200) this._line(I.ema200, i0, i1, "rgba(155,123,255,0.95)", 1.6);
+    if (on.ema20) this._line(I.ema20, i0, i1, this.theme.ma20, 1.1);
+    if (on.ema50) this._line(I.ema50, i0, i1, this.theme.ma50, 1.2);
+    if (on.ema200) this._line(I.ema200, i0, i1, this.theme.ma200, 1.6);
     if (on.vwap && I.vwap) this._line(I.vwap, i0, i1, "rgba(255,152,0,0.85)", 1.3);
   }
 
@@ -1341,6 +1345,29 @@ export class ChartEngine {
     ctx.lineTo(this.plotW, yy);
     ctx.stroke();
     ctx.setLineDash([]);
+  }
+
+  // a soft glow on the last close: the live price reads as the focus of the chart
+  _drawLastDot() {
+    const i = this.d.length - 1;
+    const x = this.x(i) + this.spacing * 0.35;
+    if (x < 0 || x > this.plotW) return;
+    const k = this.d[i];
+    const y = this.y(k.c);
+    const col = k.c >= k.o ? this.theme.up : this.theme.down;
+    const ctx = this.ctx;
+    const r = 10 * this.scale;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, hexA(col, 0.5));
+    g.addColorStop(1, hexA(col, 0));
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.arc(x, y, 2.4 * this.scale, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   _drawCrosshair() {
@@ -1512,7 +1539,7 @@ export class ChartEngine {
     // crosshair price always on top
     const h = this.hover;
     if (h && !this.drag && h.area !== "taxis" && h.y <= this.mainH) {
-      this._tag(h.y, this.fmt(this.price(h.y)), "#2a3a5c");
+      this._tag(h.y, this.fmt(this.price(h.y)), this.theme.label);
     }
   }
 
@@ -1543,7 +1570,7 @@ export class ChartEngine {
       ctx.font = this.fontB;
       const w = ctx.measureText(txt).width + 14 * this.scale;
       const xx = clamp(this.x(i) - w / 2, 0, this.plotW - w);
-      ctx.fillStyle = "#2a3a5c";
+      ctx.fillStyle = this.theme.label;
       ctx.fillRect(xx, top + 2, w, this.timeH - 4);
       ctx.fillStyle = "#fff";
       ctx.textAlign = "center";

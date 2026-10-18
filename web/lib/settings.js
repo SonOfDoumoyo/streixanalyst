@@ -41,12 +41,15 @@ export const CANDLE_PRESETS = [
   { name: "Colour-blind", up: "#1f77ff", down: "#ff9f1c" },
 ];
 
+// Chart backgrounds to choose from, per app mode. The chart always matches the app's light or dark mode.
 export const CHART_BACKGROUNDS = [
-  { name: "TradingView", bg: "#131722", grid: "rgba(42,46,57,0.85)", text: "#787b86" },
-  { name: "Black", bg: "#0a0a0a", grid: "rgba(255,255,255,0.06)", text: "#9a968c" },
-  { name: "Carbon", bg: "#0e1013", grid: "rgba(255,255,255,0.05)", text: "#9aa3ad" },
-  { name: "Charcoal", bg: "#171717", grid: "rgba(255,255,255,0.07)", text: "#a8a49a" },
-  { name: "Paper", bg: "#ffffff", grid: "rgba(20,40,90,0.07)", text: "#5a6b8c" },
+  { mode: "dark", name: "TradingView", bg: "#131722", grid: "rgba(42,46,57,0.85)", text: "#787b86" },
+  { mode: "dark", name: "Black", bg: "#0a0a0a", grid: "rgba(255,255,255,0.06)", text: "#9a968c" },
+  { mode: "dark", name: "Carbon", bg: "#0e1013", grid: "rgba(255,255,255,0.05)", text: "#9aa3ad" },
+  { mode: "dark", name: "Charcoal", bg: "#171717", grid: "rgba(255,255,255,0.07)", text: "#a8a49a" },
+  { mode: "light", name: "White", bg: "#ffffff", grid: "rgba(42,46,57,0.08)", text: "#5d6676" },
+  { mode: "light", name: "Warm", bg: "#fbfaf7", grid: "rgba(60,50,30,0.08)", text: "#6b6557" },
+  { mode: "light", name: "Cool", bg: "#f5f7fb", grid: "rgba(20,40,90,0.07)", text: "#5a6b8c" },
 ];
 
 const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);

@@ -11,6 +11,7 @@ import { RequireAuth } from "@/components/ui";
 import { ApiError, get, post, qs } from "@/lib/api";
 import { gradeClass, toOverlay, verdictTone } from "@/lib/analysis";
 import { cleanSymbol, fmtChange, fmtPct, fmtPrice, TFS } from "@/lib/format";
+import { chartThemeFor } from "@/lib/chartTheme";
 
 function TV() {
   const { settings, toast } = useAuth();
@@ -38,8 +39,7 @@ function TV() {
   useEffect(() => {
     if (!ready || !eng.current) return;
     const e = eng.current;
-    e.setTheme({ bg: settings.chart.background, grid: settings.chart.gridColor, text: settings.chart.textColor, up: settings.candles.up, down: settings.candles.down,
-      wickUp: settings.candles.wickUp, wickDown: settings.candles.wickDown, borderUp: settings.candles.borderUp, borderDown: settings.candles.borderDown });
+    e.setTheme(chartThemeFor(settings.theme, settings.chart, settings.candles));
     e.setOptions({ style: settings.candles.style, volume: true, indicators: settings.indicators });
     e.setDetail(detail);
   }, [ready, settings, detail]);
@@ -79,7 +79,7 @@ function TV() {
       const a = settings.analysis;
       const d = await post("/analysis/run", { symbol, tf, account: Number(a.account) || 1000, risk_pct: Number(a.risk_pct) || 1, mode: "beginner" });
       setRes(d);
-      const ov = toOverlay(d, { up: settings.candles.up, down: settings.candles.down, text: settings.chart.textColor });
+      const ov = toOverlay(d, chartThemeFor(settings.theme, settings.chart, settings.candles));
       eng.current.setAnalysis(ov.items, { animate: true, pins: ov.pins });
       if (d.view) eng.current.fitTimes(d.candles[Math.max(0, d.view.x_from)][0], d.candles[d.candles.length - 1][0] + d.meta.tf_seconds * 30, 6);
     } catch (e) {

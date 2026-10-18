@@ -14,6 +14,7 @@ import { ApiError, get, post, qs } from "@/lib/api";
 import { toOverlay, toUserDrawings } from "@/lib/analysis";
 import { cleanSymbol, fmtDateTime, fmtPct, fmtPrice, TF_LABEL } from "@/lib/format";
 import { localGet, localSet } from "@/lib/settings";
+import { chartThemeFor } from "@/lib/chartTheme";
 
 const RANDOM = [["BTCUSDT", "1h"], ["ETHUSDT", "4h"], ["SOLUSDT", "1h"], ["XAUUSD", "1h"], ["EURUSD", "15m"], ["GBPUSD", "1h"],
   ["NAS100", "1h"], ["US30", "4h"], ["XRPUSDT", "4h"], ["USDJPY", "1h"], ["BNBUSDT", "1D"], ["GBPJPY", "4h"]];
@@ -91,11 +92,9 @@ function PracticeInner() {
   const symRef = useRef(symbol);
   symRef.current = symbol;
 
-  const theme = useMemo(() => ({
-    bg: settings.chart.background, grid: settings.chart.gridColor, text: settings.chart.textColor, crosshair: settings.chart.crosshair,
-    up: settings.candles.up, down: settings.candles.down, wickUp: settings.candles.wickUp, wickDown: settings.candles.wickDown,
-    borderUp: settings.candles.borderUp, borderDown: settings.candles.borderDown,
-  }), [settings.chart, settings.candles]);
+  // the chart follows the app's light or dark mode (see lib/chartTheme.js)
+  const theme = useMemo(() => chartThemeFor(settings.theme, settings.chart, settings.candles),
+    [settings.theme, settings.chart, settings.candles]);
 
   useEffect(() => {
     if (!ready) return;

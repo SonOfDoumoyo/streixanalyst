@@ -12,6 +12,7 @@ import { DIRECTION_VIEWS } from "@/components/DirectionBar";
 import { get, patch, post } from "@/lib/api";
 import { currentPushState, disablePush, enablePush, pushSupported } from "@/lib/push";
 import { CANDLE_PRESETS, CHART_BACKGROUNDS, DEFAULT_SETTINGS } from "@/lib/settings";
+import { chartThemeFor } from "@/lib/chartTheme";
 
 const SECTIONS = [["profile", "Profile", "user"], ["chart", "Chart & candles", "palette"], ["analysis", "Analysis", "zap"], ["alerts", "Phone alerts", "bell"], ["security", "Password", "lock"], ["help", "Learning & tour", "shield"]];
 
@@ -29,10 +30,11 @@ function ColorRow({ label, value, onChange }) {
 
 function Preview({ s }) {
   const c = s.candles;
+  const t = chartThemeFor(s.theme, s.chart, s.candles);
   const bars = [[40, 70, 30, 60], [60, 66, 44, 48], [48, 80, 46, 76], [76, 90, 70, 72], [72, 74, 52, 56], [56, 84, 54, 82], [82, 96, 78, 94], [94, 98, 70, 74]];
   return (
-    <svg viewBox="0 0 260 120" style={{ width: "100%", height: 140, borderRadius: 12, background: s.chart.background, border: "1px solid var(--line)" }}>
-      {s.chart.grid ? [30, 60, 90].map((y) => <line key={y} x1="0" x2="260" y1={y} y2={y} stroke={s.chart.gridColor} />) : null}
+    <svg viewBox="0 0 260 120" style={{ width: "100%", height: 140, borderRadius: 12, background: t.bg, border: "1px solid var(--line)" }}>
+      {s.chart.grid ? [30, 60, 90].map((y) => <line key={y} x1="0" x2="260" y1={y} y2={y} stroke={t.grid} />) : null}
       {bars.map(([o, h, l, cl], i) => {
         const up = cl >= o;
         const x = 20 + i * 30;
@@ -43,7 +45,7 @@ function Preview({ s }) {
         return (
           <g key={i}>
             <line x1={x} x2={x} y1={y(h)} y2={y(l)} stroke={up ? c.wickUp : c.wickDown} strokeWidth="1.5" />
-            <rect x={x - 8} y={top} width="16" height={hgt} fill={hollow ? s.chart.background : up ? c.up : c.down} stroke={up ? c.borderUp : c.borderDown} strokeWidth="1.2" />
+            <rect x={x - 8} y={top} width="16" height={hgt} fill={hollow ? t.bg : up ? c.up : c.down} stroke={up ? c.borderUp : c.borderDown} strokeWidth="1.2" />
           </g>
         );
       })}
@@ -220,9 +222,9 @@ function SettingsInner() {
                 </Field>
                 <div className="divider" />
                 <b>Chart</b>
-                <div className="label">Background</div>
+                <div className="label">Background · follows {settings.theme === "light" ? "light" : "dark"} mode</div>
                 <div className="row wrap" style={{ gap: 8 }}>
-                  {CHART_BACKGROUNDS.map((b) => (
+                  {CHART_BACKGROUNDS.filter((b) => b.mode === (settings.theme === "light" ? "light" : "dark")).map((b) => (
                     <button key={b.name} className="chip" onClick={() => updateSettings({ chart: { background: b.bg, gridColor: b.grid, textColor: b.text } })}
                       style={settings.chart.background === b.bg ? { borderColor: "var(--brand)" } : undefined}>
                       <span style={{ display: "inline-block", width: 12, height: 12, borderRadius: 4, background: b.bg, border: "1px solid var(--line-2)", marginRight: 6, verticalAlign: "-2px" }} />{b.name}
