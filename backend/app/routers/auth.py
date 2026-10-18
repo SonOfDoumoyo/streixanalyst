@@ -322,8 +322,8 @@ def oauth_start(provider: str, next: str | None = None, invite: str | None = Non
 @router.get("/oauth/{provider}/callback")
 def oauth_callback(provider: str, request: Request, code: str | None = None, state: str | None = None,
                    error: str | None = None, db: Session = Depends(get_db)):
-    def fail(msg):
-        r = RedirectResponse(f"{settings.frontend_url}/login?error={quote(msg)}", status_code=302)
+    def fail(msg, page="login"):
+        r = RedirectResponse(f"{settings.frontend_url}/{page}?error={quote(msg)}", status_code=302)
         r.delete_cookie("sa_oauth", domain=settings.cookie_domain, path="/")
         return r
 
@@ -349,7 +349,8 @@ def oauth_callback(provider: str, request: Request, code: str | None = None, sta
             return fail("That email already has an account. Sign in with your password first.")
         if not user:
             if not saved.get("terms"):
-                return fail("Tick the Terms of Service and Privacy Policy to create your account.")
+                # a new Google account is created on the sign-up page, where the Terms box is
+                return fail("Tick the Terms of Service and Privacy Policy box, then continue with Google to create your account.", "signup")
             user = new_user(db, prof["email"], prof["first_name"], prof["last_name"], None, None,
                             prof["email_verified"], prof["picture"])
             record_terms(user, saved.get("learn"))
