@@ -132,6 +132,11 @@ class Settings:
         self.smtp_user = env("SMTP_USER")
         self.smtp_password = env("SMTP_PASSWORD")
         self.smtp_from = env("SMTP_FROM", "StreixAnalyst <no-reply@streixanalyst.com>")
+        # email over HTTPS (works on Render's free plan, which blocks SMTP): Brevo or Resend. See services/mailer.py.
+        self.email_provider = (env("EMAIL_PROVIDER", "auto") or "auto").strip().lower()    # auto | brevo | resend | smtp
+        self.brevo_api_key = env("BREVO_API_KEY")
+        self.resend_api_key = env("RESEND_API_KEY")
+        self.email_from = env("EMAIL_FROM", env("SMTP_FROM", "StreixAnalyst <no-reply@streixanalyst.com>"))
 
         self.cryptopanic_token = env("CRYPTOPANIC_TOKEN")
         self.enable_background = env_bool("ENABLE_BACKGROUND", True)

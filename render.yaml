@@ -69,7 +69,12 @@ services:
         value: trc20
       - key: CRYPTO_EXPLORER_API_KEY
         sync: false
-      # Email: confirmation links and password resets. Any SMTP provider.
+      # Email: confirmation links and password resets. The free plan blocks SMTP: set BREVO_API_KEY + EMAIL_FROM.
+      - key: BREVO_API_KEY
+        sync: false
+      - key: EMAIL_FROM
+        sync: false          # e.g. StreixAnalyst <your-verified-sender@gmail.com>
+      # SMTP (paid plans only on Render)
       - key: SMTP_HOST
         sync: false
       - key: SMTP_PORT

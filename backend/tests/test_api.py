@@ -1109,6 +1109,52 @@ def t_email_verification(_c):
         mailer.send, cfg.smtp_host = real_send, real_host
 
 
+def t_email_brevo(_c):
+    """Email over Brevo's HTTPS API (Render's free plan blocks SMTP): the admin test shows the provider's answer and a
+    fix when it fails, and a new account's confirmation link goes out through Brevo."""
+    from app.services import mailer
+    sent = []
+
+    def brevo(req):
+        assert req.url.host == "api.brevo.com" and req.url.path == "/v3/smtp/email"
+        if req.headers.get("api-key") == "bad":
+            return httpx.Response(401, json=dict(code="unauthorized", message="Key not found"))
+        sent.append(json.loads(req.content))
+        return httpx.Response(201, json=dict(messageId="<1@smtp-relay.mailin.fr>"))
+    mailer.set_client(httpx.Client(transport=httpx.MockTransport(brevo)))
+    real = settings.brevo_api_key, settings.email_from
+    settings.brevo_api_key, settings.email_from = "xkeysib-test", "StreixAnalyst <owner.streix@gmail.com>"
+    try:
+        check(mailer.provider() == "brevo" and mailer.configured(), mailer.provider())
+        adm = client()
+        check(adm.post("/api/auth/login", json=dict(email="owner@streixcorp.com", password="Admin-Pass-2026!"),
+                       headers=H).status_code == 200, "admin login")
+        r = adm.post("/api/admin/email/test", json={}, headers=H).json()
+        check(r["ok"] and sent[-1]["to"] == [dict(email="owner@streixcorp.com")]
+              and sent[-1]["sender"] == dict(name="StreixAnalyst", email="owner.streix@gmail.com"), (r, sent[-1:]))
+        settings.brevo_api_key = "bad"
+        r = adm.post("/api/admin/email/test", json=dict(to="me@example.com"), headers=H).json()
+        check(not r["ok"] and "401" in r["error"] and "API key" in (r["hint"] or ""), r)
+        st = adm.get("/api/admin/system").json()["email_status"]
+        check(st["provider"] == "brevo" and st["failed"] >= 1 and st["last_hint"], st)
+        settings.brevo_api_key = "xkeysib-test"
+        n = len(sent)
+        r = signup(client(), "brevo.user@example.com")
+        for _ in range(100):
+            if len(sent) > n:
+                break
+            time.sleep(0.05)
+        check(r.status_code == 201 and r.json()["user"]["email_verified"] is False, r.text)
+        check(len(sent) > n and sent[-1]["to"][0]["email"] == "brevo.user@example.com"
+              and '/verify?token=' in sent[-1]["htmlContent"] and "<a href=" in sent[-1]["htmlContent"], sent[-1:])
+        check("network is unreachable" not in (mailer.hint_for(OSError(101, "Network is unreachable")) or "x")
+              and "free plan" in mailer.hint_for(OSError(101, "Network is unreachable")), "SMTP-blocked hint")
+        check("App Password" in mailer.hint_for(Exception("(535, b'5.7.8 Username and Password not accepted')")), "Gmail hint")
+    finally:
+        settings.brevo_api_key, settings.email_from = real
+        mailer.set_client(None)
+
+
 def t_psychology(_c):
     """The notes about a person's calls come from their own earlier calls: chasing the entry, calling again straight
     after a loss, and the feeling they named. Nothing is said until there are enough calls to say it."""
@@ -1262,6 +1308,7 @@ def main():
         run("t_brain_version", t_brain_version, None)
         run("t_direction_view", t_direction_view, None)
         run("t_email_verification", t_email_verification, client())
+        run("t_email_brevo", t_email_brevo, None)
         run("t_psychology", t_psychology, None)
         run("t_replay_decisions", t_replay_decisions, client())
         run("t_behaviour_model", t_behaviour_model, None)

@@ -45,7 +45,7 @@ def stats(admin: User = Depends(admin_user), db: Session = Depends(get_db)):
 
 def _user_row(u):
     return dict(id=u.id, email=u.email, name=u.name, experience=u.experience, role=u.role, is_active=u.is_active,
-                suspended_at=iso(u.suspended_at), suspended_reason=u.suspended_reason,
+                suspended_at=iso(u.suspended_at), suspended_reason=u.suspended_reason, email_verified=u.email_verified,
                 tier=tier_of(u), plan=u.plan, plan_expires_at=iso(u.plan_expires_at), trial_ends_at=iso(u.trial_ends_at),
                 org=u.org.name if u.org else None, org_role=u.org_role, created_at=iso(u.created_at),
                 last_seen_at=iso(u.last_seen_at), streak_days=u.streak_days, phone=u.phone)
@@ -69,6 +69,7 @@ class UserPatch(BaseModel):
     pro_days: int | None = Field(None, ge=-3650, le=3650)     # add (or remove) Pro days
     trial_days: int | None = Field(None, ge=-365, le=365)     # add (or remove) trial days
     experience: str | None = None
+    email_verified: bool | None = None         # confirm an email by hand (e.g. it was signed up while email was down)
     note: str | None = None
 
 
@@ -101,6 +102,8 @@ def patch_user(user_id: int, body: UserPatch, admin: User = Depends(admin_user),
         u.trial_ends_at = base + timedelta(days=body.trial_days)
     if body.experience in ("beginner", "intermediate", "advanced"):
         u.experience = body.experience
+    if body.email_verified is not None:
+        u.email_verified = bool(body.email_verified)
     billing.audit(db, "user_updated", u.email, body.model_dump(exclude_none=True), admin.id)
     db.commit()
     return dict(user=_user_row(u))
@@ -328,8 +331,30 @@ def put_settings(body: SettingsIn, admin: User = Depends(admin_user), db: Sessio
 def system(admin: User = Depends(admin_user)):
     return dict(engine=engine.status(), catalog=catalog.status(), ai_provider=streixai.provider(),
                 paystack=settings.paystack_enabled, dedicated_accounts=settings.paystack_dva_enabled,
-                opay=settings.opay_enabled, email=mailer.configured(), google=settings.google_enabled,
-                linkedin=settings.linkedin_enabled, env=settings.env, database=settings.database_url.split(":")[0])
+                opay=settings.opay_enabled, email=mailer.configured(), email_status=mailer.status(),
+                google=settings.google_enabled, linkedin=settings.linkedin_enabled, env=settings.env,
+                database=settings.database_url.split(":")[0])
+
+
+class EmailTestIn(BaseModel):
+    to: str | None = Field(None, max_length=255)
+
+
+@router.post("/email/test")
+def email_test(body: EmailTestIn, admin: User = Depends(admin_user)):
+    """Send one email now and report exactly what the provider answered, with what to do if it failed."""
+    to = (body.to or admin.email).strip()
+    if "@" not in to:
+        raise HTTPException(422, "Enter an email address.")
+    try:
+        mailer.deliver(to, "StreixAnalyst test email",
+                       "This is a test from your StreixAnalyst admin console. If you can read it, confirmation and "
+                       "password-reset emails will reach people too.\n\n— StreixAnalyst")
+    except mailer.MailError as e:
+        mailer._record(False, e)
+        return dict(ok=False, to=to, provider=mailer.provider(), error=str(e)[:400], hint=mailer.hint_for(e))
+    mailer._record(True)
+    return dict(ok=True, to=to, provider=mailer.provider())
 
 
 @router.post("/brain/reload")

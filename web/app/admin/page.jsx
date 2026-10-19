@@ -188,7 +188,7 @@ function Users({ toast, me }) {
               <tbody>
                 {d.users.map((u) => (
                   <tr key={u.id}>
-                    <td><b>{u.name}</b> {u.role === "admin" ? <span className="badge brand">admin</span> : null} {!u.is_active ? <span className="badge down" title={u.suspended_reason || ""}>suspended</span> : null}
+                    <td><b>{u.name}</b> {u.role === "admin" ? <span className="badge brand">admin</span> : null} {!u.is_active ? <span className="badge down" title={u.suspended_reason || ""}>suspended</span> : null} {!u.email_verified ? <span className="badge warn">email not confirmed</span> : null}
                       <div className="faint">{u.email}{u.phone ? ` · ${u.phone}` : ""} · {u.experience || "—"}</div>
                       {!u.is_active ? <div className="hint">Suspended {u.suspended_at ? fmtDateTime(u.suspended_at) : ""}{u.suspended_reason ? `: ${u.suspended_reason}` : ""}</div> : null}</td>
                     <td><span className="badge" style={{ textTransform: "capitalize" }}>{u.tier}</span>
@@ -200,6 +200,7 @@ function Users({ toast, me }) {
                         <button className="btn sm" onClick={() => upd(u, { pro_days: 30 }, "Added 30 Pro days")}>+30d Pro</button>
                         <button className="btn sm" onClick={() => upd(u, { trial_days: 7 }, "Added 7 trial days")}>+7d trial</button>
                         <button className="btn sm ghost" onClick={() => resetPw(u)}>Reset password</button>
+                        {!u.email_verified ? <button className="btn sm ghost" onClick={() => upd(u, { email_verified: true }, "Email marked as confirmed")}>Confirm email</button> : null}
                         {u.id !== me.id ? (
                           <>
                             {u.is_active ? <button className="btn sm ghost" onClick={() => suspend(u)}>Suspend</button>
@@ -293,6 +294,52 @@ function Settings({ toast }) {
   );
 }
 
+const MAIL_LABEL = { brevo: "Brevo (HTTPS)", resend: "Resend (HTTPS)", smtp: "SMTP" };
+
+function EmailCard({ st, toast, reload }) {
+  const [to, setTo] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState(null);
+  const test = async () => {
+    setBusy(true);
+    setRes(null);
+    try {
+      const r = await post("/admin/email/test", { to: to.trim() || null });
+      setRes(r);
+      toast(r.ok ? `Test email sent to ${r.to}. Check the inbox and the spam folder.` : "The test email failed. See why below.", r.ok ? "success" : "error");
+      reload();
+    } catch (e) { toast(e.message, "error"); }
+    setBusy(false);
+  };
+  const last = st && st.last_error;
+  return (
+    <div className="card stack">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <b>Email (confirmation links, password resets)</b>
+        <span className={`badge ${st && st.configured ? "up" : "warn"}`}>{st && st.provider ? MAIL_LABEL[st.provider] : "not set up"}</span>
+      </div>
+      {st && st.configured ? (
+        <div className="muted" style={{ fontSize: "0.9rem" }}>
+          From {st.sender_name} &lt;{st.sender || "no address"}&gt; · {st.sent} sent, {st.failed} failed since the server started
+        </div>
+      ) : (
+        <div className="hint">No email provider yet, so new accounts count as confirmed. Set BREVO_API_KEY and EMAIL_FROM in the API&apos;s environment (free, works on Render&apos;s free plan).</div>
+      )}
+      {last ? (
+        <div className="hint warn">Last failure {fmtDateTime(last.at * 1000)}: {last.error}{st.last_hint ? <div style={{ marginTop: 4 }}><b>Fix:</b> {st.last_hint}</div> : null}</div>
+      ) : null}
+      {st && st.provider === "smtp" ? (
+        <div className="hint">Render&apos;s free plan blocks outgoing SMTP, Gmail included. On the free plan use Brevo (BREVO_API_KEY) instead.</div>
+      ) : null}
+      <div className="row wrap" style={{ gap: 8 }}>
+        <input className="input sm" style={{ maxWidth: 280 }} placeholder="Send a test to (your email if empty)" value={to} onChange={(e) => setTo(e.target.value)} />
+        <button className="btn sm primary" onClick={test} disabled={busy || !(st && st.configured)}>{busy ? <span className="spinner" /> : <Icon name="send" size={14} />} Send test email</button>
+      </div>
+      {res && !res.ok ? <div className="hint warn">{res.error}{res.hint ? <div style={{ marginTop: 4 }}><b>Fix:</b> {res.hint}</div> : null}</div> : null}
+    </div>
+  );
+}
+
 function System({ toast }) {
   const [s, setS] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -334,6 +381,7 @@ function System({ toast }) {
           <button className="btn" onClick={async () => { await post("/admin/brain/reload"); load(); toast("Reloaded", "success"); }}><Icon name="refresh" size={16} /> Reload</button>
         </div>
       </div>
+      <EmailCard st={s.email_status} toast={toast} reload={load} />
       <div className="card stack">
         <b>Services</b>
         <div className="row wrap" style={{ gap: 10, fontSize: "0.9rem" }}>
