@@ -220,6 +220,9 @@ export class ChartEngine {
   _recompute() {
     this.ha = this.opts.style === "heikin" ? heikinAshi(this.d) : null;
     this.ind = this.d.length ? computeAll(this.d, this.tfSec < 86400) : null;
+    let top = 1;
+    for (const k of this.d) if (k.h > top) top = k.h;
+    this._axisRef = top;         // the widest price in the data sets the axis width (see layout)
     this._kz = null;             // killzone of each candle, worked out again for the new data
   }
 
@@ -300,7 +303,8 @@ export class ChartEngine {
     this.fontB = `600 ${fs}px ${this.theme.font}`;
     const ctx = this.ctx;
     ctx.font = this.font;
-    const sample = this.fmt(Math.max(Math.abs(this.pmax || 0), Math.abs(this.pmin || 0), 1) * 1.1);
+    // sized from the widest price in the data, not the visible range, so the axis keeps its width while the price pane is scaled
+    const sample = this.fmt(Math.max(this._axisRef || 1, 1) * 1.1);
     this.axisW = Math.max(Math.round(58 * s), Math.ceil(ctx.measureText(sample).width) + Math.round(20 * s));
     this.timeH = Math.round(24 * s);
     const avail = this.H - this.timeH;
@@ -956,11 +960,12 @@ export class ChartEngine {
       return;
     }
     if (dr.mode === "cross") {
-      // The crosshair lasts as long as the finger is down. Lifting the finger removes it and offers a line or an
-      // alert at the price it was on. A cancelled touch only removes it.
+      // The crosshair lasts as long as the finger is down, and lifting removes it with no menu, as on TradingView.
+      // Only a finger lifted on the price tag (the right-hand scale) offers a line or an alert at that price. A cancelled
+      // touch just removes the crosshair.
       this.hover = null;
       this.emit("hover", null);
-      if (e.type !== "pointercancel") this._crossMenu(e.clientX, e.clientY, clamp(x, 0, this.plotW), clamp(y, 0, this.mainH));
+      if (e.type !== "pointercancel" && x > this.plotW && y >= 0 && y <= this.mainH) this._crossMenu(e.clientX, e.clientY, this.plotW, y);
       this.dirty();
       return;
     }
@@ -1119,14 +1124,16 @@ export class ChartEngine {
     this.emit("view", this.viewState());
   }
 
-  /** Set the visible price range from its middle and its span, both on the price scale (log or linear). The span is
-   *  kept between a sliver of the price (0.2%) and about twenty times it. Without that limit a few pixels of finger
-   *  movement can stretch the axis into numbers like 10^25, which is how the right-hand scale blew up. */
+  /** Set the visible price range from its middle and its span, both on the price scale (log or linear). The price pane
+   *  scales about the middle, so the candles shrink as the range grows, and a linear range may pass zero, as on
+   *  TradingView. The span is kept finite: 0.2% to 100 times the last price (log: up to e^6). Without that limit a few
+   *  pixels of finger movement can stretch the axis into numbers like 10^25, which is how the right-hand scale blew up. */
   _setY(mid, span) {
     if (!Number.isFinite(mid) || !Number.isFinite(span)) return;     // leave the scale as it was
     const log = !!this.opts.logScale;
-    const ref = log ? 1 : Math.abs(mid) || 1;                       // linear: measure the span against the price
-    const s = clamp(span / ref, 0.002, log ? 3 : 2) * ref;
+    const last = this.d.length ? Math.abs(this.d[this.d.length - 1].c) : 0;
+    const ref = log ? 1 : last || Math.abs(mid) || 1;      // linear: the span is measured against the last price
+    const s = clamp(span / ref, 0.002, log ? 6 : 100) * ref;
     this.pmin = this._fi(mid - s / 2);
     this.pmax = this._fi(mid + s / 2);
   }
@@ -1644,11 +1651,12 @@ export class ChartEngine {
     ctx.fillText(`RSI 14${last ? "  " + last.toFixed(1) : ""}`, 8, top + 12 * this.scale);
   }
 
-  _tag(y, text, bg, fg = "#fff", xLeft = null) {
+  _tag(y, text, bg, fg = "#fff", xLeft = null, ring = false) {
     const ctx = this.ctx;
     ctx.font = this.fontB;
     const pad = 6 * this.scale;
-    const w = Math.max(this.axisW - 4, ctx.measureText(text).width + pad * 2);
+    const ringW = ring ? 14 * this.scale : 0;        // room for the small ring on the crosshair's tag
+    const w = Math.max(this.axisW - 4, ctx.measureText(text).width + pad * 2 + ringW);
     const h = this.fs + 8 * this.scale;
     const x = xLeft === null ? this.plotW + 1 : xLeft;
     const yy = clamp(y - h / 2, 0, this.mainH - h);
@@ -1660,7 +1668,14 @@ export class ChartEngine {
     ctx.fillStyle = fg;
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.fillText(text, x + pad, yy + h / 2 + 0.5);
+    if (ring) {
+      ctx.strokeStyle = fg;
+      ctx.lineWidth = 1.2 * this.scale;
+      ctx.beginPath();
+      ctx.arc(x + pad + 4 * this.scale, yy + h / 2, 3.5 * this.scale, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.fillText(text, x + pad + ringW, yy + h / 2 + 0.5);
     return { y: yy, h };
   }
 
@@ -1740,7 +1755,7 @@ export class ChartEngine {
     // crosshair price always on top
     const h = this.hover;
     if (h && (!this.drag || this.drag.mode === "cross") && h.area !== "taxis" && h.y <= this.mainH) {
-      this._tag(h.y, this.fmt(this.price(h.y)), this.theme.label);
+      this._tag(h.y, this.fmt(this.price(h.y)), this.theme.label, "#fff", null, true);
     }
   }
 
