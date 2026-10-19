@@ -1,4 +1,5 @@
 "use client";
+import { CHART_TYPES } from "@/components/chart/series";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -215,7 +216,7 @@ function SettingsInner() {
                 </div>
                 <Field label="Chart type">
                   <select className="select" value={C.style} onChange={(e) => setC("style", e.target.value)}>
-                    {[["candles", "Candles"], ["hollow", "Hollow candles"], ["heikin", "Heikin Ashi"], ["bars", "OHLC bars"], ["line", "Line"], ["area", "Area"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                    {CHART_TYPES.filter((t) => !t.needs).map((t) => <option key={t.id} value={t.id}>{t.label}</option>)}
                   </select>
                 </Field>
                 <div className="divider" />

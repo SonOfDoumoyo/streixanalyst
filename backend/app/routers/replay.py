@@ -10,7 +10,7 @@ from ..models import AnalysisLog, User, iso, jdump, jload, utcnow
 from ..plans import consume, features_of, refund, require_feature, tier_of
 from ..services import engine, psychology
 from ..services import replay as rp
-from .analysis import _mode
+from .analysis import _mode, learning_note
 
 router = APIRouter(prefix="/replay", tags=["replay"])
 
@@ -57,6 +57,7 @@ def analyze(body: AnalyzeIn, user: User = Depends(verified_user), db: Session = 
         raise HTTPException(500, f"The replay failed unexpectedly ({type(e).__name__}). Please try again.")
     if "pro_report" not in features_of(tier_of(user)):          # free plan: the report in the user's own mode only
         res["report_pro" if mode == "beginner" else "report_beginner"] = None
+    res["learning"] = learning_note(res)
     pl, vd = res.get("plan") or {}, res.get("verdict") or {}
     j = min(1, len(pl.get("tps") or [0]) - 1)
     at = engine.parse_moment(body.at)

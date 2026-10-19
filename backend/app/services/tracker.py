@@ -10,7 +10,10 @@ How a call is judged (the same rules the model was trained with, so the record a
   candle, a gap through the stop fills at the open, and the trade is closed at market after MAX_HOLD candles.
 - Trading costs and stop slippage for the asset class are taken off every result (R = multiples of planned risk).
 - Results are written once and never edited. Identical calls (same market, timeframe and side, entry within a
-  quarter of the risk, inside the order's lifetime) count once: later copies point at the first one (dup_of)."""
+  quarter of the risk, inside the order's lifetime) count once: later copies point at the first one (dup_of).
+- A stopped call keeps being watched until its holding time ends: if price then reaches the target, the stop was
+  swept (services/excursion.py). The result stays a loss; the sweep is recorded beside it, for learning.
+- Replay calls, made at a moment in the past, are settled the same way as soon as the candles after them exist."""
 import logging
 import math
 from collections import defaultdict
@@ -25,6 +28,7 @@ import market_data as md
 
 from ..db import SessionLocal
 from ..models import AnalysisLog, jload, utcnow
+from . import excursion, journal
 
 log = logging.getLogger("streix.tracker")
 EXPIRY = gm.EXPIRY
@@ -160,8 +164,76 @@ def _apply(row, res, now):
     return True
 
 
+def _hold_end(row, tf_sec):
+    fill_t = _ts(row.filled_at) if row.filled_at else _ts(row.created_at)
+    return fill_t + MAX_HOLD * tf_sec
+
+
+def _travel(row, arr, res, tf_sec, now_ts):
+    """After a call is settled: how far it went against and for the position, and for a stopped call whether price went
+    on to the target afterwards (a stop sweep). Returns True when the after-stop watch is finished."""
+    t, o, h, l, c = arr
+    risk = abs(float(row.entry) - float(row.sl))
+    st = res.get("status") if res else row.outcome
+    fill_t = res.get("fill_t") if res else (_ts(row.filled_at) if row.filled_at else None)
+    exit_t = res.get("exit_t") if res else (_ts(row.outcome_at) if row.outcome_at else None)
+    fill = res.get("fill") if res else float(row.entry)
+    if res and st in RESOLVED:
+        row.mae_r, row.mfe_r = excursion.excursions(t, h, l, row.side, fill_t, float(fill or row.entry), exit_t, risk)
+    if st != "sl":
+        row.post_final = True
+        return True
+    if fill_t is None or exit_t is None:
+        row.post_final = True
+        return True
+    post = excursion.after_stop(t, h, l, row.side, float(row.sl), float(row.tp), exit_t, fill_t + MAX_HOLD * tf_sec, risk, now_ts)
+    row.swept, row.sweep_depth_r, row.post_final = post["swept"], post["depth_r"], post["final"]
+    return post["final"]
+
+
+def _settle_replays(db, now, counts, limit=30):
+    """Replay calls are dated to their moment in the past, so how they played out is already known: settle them
+    without waiting for the person to press Reveal (the same rules, the same candles as Reveal uses)."""
+    rows = db.execute(select(AnalysisLog).where(
+        AnalysisLog.kind == "replay", AnalysisLog.side.is_not(None), AnalysisLog.entry.is_not(None),
+        AnalysisLog.sl.is_not(None), AnalysisLog.tp.is_not(None),
+        (AnalysisLog.outcome.is_(None)) | (AnalysisLog.outcome.in_(OPEN_STATES)) |
+        ((AnalysisLog.outcome == "sl") & (AnalysisLog.post_final.is_not(True))))
+        .order_by(AnalysisLog.id).limit(limit)).scalars().all()
+    for r in rows:
+        if r.checked_at and (now - r.checked_at).total_seconds() < 1800:
+            continue
+        if r.tf not in md.TF_MIN:
+            r.outcome, r.checked_at, r.post_final = "void", now, True
+            continue
+        at = pd.Timestamp(r.created_at, tz="UTC")
+        tf_sec = tf_seconds(r.tf)
+        end = min(at + pd.Timedelta(seconds=(EXPIRY + 2 * MAX_HOLD) * tf_sec), pd.Timestamp(now, tz="UTC"))
+        try:
+            C = md.get_candles(r.symbol, fine_tf(r.tf), bars=None, start=at, end=end, min_bars=1, refresh_s=3600)
+        except Exception as e:
+            log.info("tracker: replay %s has no data: %s", r.id, str(e)[:120])
+            r.checked_at = now
+            continue
+        cost, slip = gm.cost_of(C.get("sub"))
+        t0 = _ts(r.created_at)
+        arr = _arrays(dict(df=C["df"], forming=None), t0)
+        res = resolve(*arr, t0=t0, tf_sec=tf_sec, side=r.side, kind=r.plan_type or "limit", entry=float(r.entry),
+                      sl=float(r.sl), tp=float(r.tp), cost_frac=cost, slip_frac=slip, now_ts=_ts(now))
+        if r.outcome is None or r.outcome in OPEN_STATES:
+            if _apply(r, res, now):
+                counts["replay_resolved"] += 1
+                if _travel(r, arr, res, tf_sec, _ts(now)):
+                    journal.record(db, r)
+        elif r.outcome == "sl":
+            r.checked_at = now
+            if _travel(r, arr, None, tf_sec, _ts(now)):
+                journal.record(db, r)
+
+
 def run_once(limit=400, fetch=None):
-    """Advance every open call. Returns counts. `fetch(symbol, tf, start)` is injectable for tests."""
+    """Advance every open call, finish the after-stop watch of stopped ones, and settle replay calls. Returns counts.
+    `fetch(symbol, tf, start)` is injectable for tests."""
     fetch = fetch or (lambda sym, tf, start: md.get_candles(sym, tf, bars=None, start=start, min_bars=1))
     db = SessionLocal()
     counts = defaultdict(int)
@@ -171,12 +243,13 @@ def run_once(limit=400, fetch=None):
         rows = db.execute(select(AnalysisLog).where(
             AnalysisLog.kind == "analysis", AnalysisLog.side.is_not(None), AnalysisLog.entry.is_not(None),
             AnalysisLog.sl.is_not(None), AnalysisLog.tp.is_not(None),
-            (AnalysisLog.outcome.is_(None)) | (AnalysisLog.outcome.in_(OPEN_STATES)),
+            (AnalysisLog.outcome.is_(None)) | (AnalysisLog.outcome.in_(OPEN_STATES)) |
+            ((AnalysisLog.outcome == "sl") & (AnalysisLog.post_final.is_not(True))),
             AnalysisLog.created_at >= now - timedelta(days=400)).order_by(AnalysisLog.id).limit(limit)).scalars().all()
         groups = defaultdict(list)
         for row in rows:
             if row.tf not in md.TF_MIN:
-                row.outcome, row.checked_at = "void", now
+                row.outcome, row.checked_at, row.post_final = "void", now, True
                 counts["void"] += 1
                 continue
             meta = _plan_meta(row)
@@ -184,7 +257,7 @@ def run_once(limit=400, fetch=None):
                 row.plan_type, row.called = meta["kind"], meta["called"]
                 orig = _dedupe(db, row, meta)
                 if orig:
-                    row.dup_of, row.outcome, row.checked_at = orig, "dup", now
+                    row.dup_of, row.outcome, row.checked_at, row.post_final = orig, "dup", now, True
                     counts["dup"] += 1
                     db.flush()
                     continue
@@ -204,23 +277,37 @@ def run_once(limit=400, fetch=None):
                 for r in rs:
                     life = (EXPIRY + MAX_HOLD) * tf_seconds(r.tf)
                     if now_ts - _ts(r.created_at) > life + 7 * 86400:
-                        r.outcome, r.checked_at = "void", now
-                        counts["void"] += 1
+                        if r.outcome == "sl":
+                            r.post_final = True                      # the stop stands; only the after-watch is lost
+                        else:
+                            r.outcome, r.checked_at = "void", now
+                            counts["void"] += 1
                 continue
             cost_frac, slip_frac = gm.cost_of(C.get("sub"))
             for r in rs:
                 t0 = _ts(r.created_at)
                 arr = _arrays(C, t0)
-                if arr[0].size and arr[0][0] - t0 > (EXPIRY + MAX_HOLD) * tf_seconds(r.tf):
-                    r.outcome, r.checked_at = "void", now          # the data doesn't reach back to the call
+                tf_sec = tf_seconds(r.tf)
+                if r.outcome == "sl":                           # settled: only the after-stop watch is left
+                    r.checked_at = now
+                    if _travel(r, arr, None, tf_sec, now_ts):
+                        journal.record(db, r)
+                    continue
+                if arr[0].size and arr[0][0] - t0 > (EXPIRY + MAX_HOLD) * tf_sec:
+                    r.outcome, r.checked_at, r.post_final = "void", now, True    # the data doesn't reach back to the call
                     counts["void"] += 1
                     continue
-                res = resolve(*arr, t0=t0, tf_sec=tf_seconds(r.tf), side=r.side, kind=r.plan_type or "limit",
+                res = resolve(*arr, t0=t0, tf_sec=tf_sec, side=r.side, kind=r.plan_type or "limit",
                               entry=float(r.entry), sl=float(r.sl), tp=float(r.tp), cost_frac=cost_frac,
                               slip_frac=slip_frac, now_ts=now_ts)
                 if _apply(r, res, now):
                     counts["resolved"] += 1
+                    if res["status"] in RESOLVED and _travel(r, arr, res, tf_sec, now_ts):
+                        journal.record(db, r)
+                    elif res["status"] not in RESOLVED:
+                        r.post_final = True
                 counts[res["status"]] += 1
+        _settle_replays(db, now, counts)
         db.commit()
     except Exception:
         db.rollback()

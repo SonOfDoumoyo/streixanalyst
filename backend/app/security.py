@@ -122,6 +122,48 @@ class RateLimiter:
             return True
 
 
+class WindowCounter:
+    """Requests per key in fixed one-minute windows: cheap enough to run on every request (two numbers per key)."""
+
+    def __init__(self, limit, window=60):
+        self.limit, self.window = limit, window
+        self.counts = {}
+        self.lock = threading.Lock()
+
+    def hit(self, key) -> bool:
+        slot = int(time.monotonic() // self.window)
+        with self.lock:
+            s, n = self.counts.get(key, (slot, 0))
+            if s != slot:
+                s, n = slot, 0
+            n += 1
+            self.counts[key] = (s, n)
+            if len(self.counts) > 50000:                      # keep memory bounded under a flood of addresses
+                for k in [k for k, (ks, _) in self.counts.items() if ks != slot][:25000]:
+                    self.counts.pop(k, None)
+            return n <= self.limit
+
+
+class FailureCounter(RateLimiter):
+    """Failures per key in a rolling window; `count` reads without adding one."""
+
+    def count(self, key) -> int:
+        now = time.monotonic()
+        with self.lock:
+            q = [t for t in self.hits.get(key, []) if now - t < self.window]
+            self.hits[key] = q
+            return len(q)
+
+
+def suspended_message(user):
+    reason = getattr(user, "suspended_reason", None)
+    return ("This account is suspended" + (f": {reason}" if reason else "") +
+            ". Contact support if you think this is a mistake.")
+
+
 login_limiter = RateLimiter(10, 15 * 60)
+ACCOUNT_LOCK_AFTER = 20
+account_failures = FailureCounter(ACCOUNT_LOCK_AFTER, 30 * 60)   # wrong passwords per account, from any address
+api_limiter = WindowCounter(settings.api_rate_per_min)          # every /api request, per address
 signup_limiter = RateLimiter(40, 60 * 60)          # classrooms sign up from one network
 market_limiter = RateLimiter(240, 60)

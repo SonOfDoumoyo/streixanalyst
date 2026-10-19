@@ -29,6 +29,10 @@ services:
         sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false          # Google AI Studio key; StreixAI uses Gemini, and falls back between models with keys
+      - key: GEMINI_MODEL
+        sync: false
       - key: TWELVEDATA_ENABLED
         sync: false          # set to 1 once you have a Twelve Data plan
       - key: TWELVEDATA_API_KEY

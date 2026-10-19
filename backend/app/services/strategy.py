@@ -16,7 +16,6 @@ import guru_model as gm
 import market_data as md
 import structure_engine as se
 
-from ..config import settings
 from . import streixai
 
 CONDITIONS = {
@@ -286,8 +285,7 @@ AI_SCHEMA_HINT = json.dumps(dict(name="string", direction="both|long|short",
 
 def parse_text_ai(text):
     """Ask the configured model to map the description onto the condition library. Returns (spec, notes) or None."""
-    prov = streixai.provider()
-    if prov == "offline":
+    if streixai.provider() == "offline":
         return None
     system = ("You convert a trader's description of a strategy into JSON for a backtester. Use ONLY these building "
               "blocks (condition types and their parameters, stop types, target types):\n" + AI_SCHEMA_HINT +
@@ -295,10 +293,8 @@ def parse_text_ai(text):
               "Output exactly one JSON object with keys name, direction, conditions, stop, target, max_hold, and "
               "'notes' (a list of short strings explaining anything you couldn't map). No prose, no code fences.")
     msgs = [{"role": "user", "content": text[:2000]}]
-    try:
-        out = "".join(p for p in (streixai._anthropic_stream if prov == "anthropic" else streixai._openai_stream)(
-            system, msgs, settings.anthropic_model_fast if prov == "anthropic" else settings.openai_model, 700))
-    except Exception:
+    out = streixai.complete(system, msgs, tier="free", max_tokens=700)
+    if not out:
         return None
     m = re.search(r"\{.*\}", out, re.S)
     if not m:

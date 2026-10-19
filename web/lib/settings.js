@@ -3,7 +3,7 @@
 export const DEFAULT_SETTINGS = {
   theme: "dark",
   candles: {
-    style: "candles", // candles | hollow | bars | line | area | heikin
+    style: "candles", // any id in components/chart/series.js CHART_TYPES
     up: "#12d9a0",
     down: "#ff3b5c",
     wickUp: "#12d9a0",
@@ -29,6 +29,11 @@ export const DEFAULT_SETTINGS = {
   analysis: { detail: 1, animate: true, account: 1000, risk_pct: 1, leverage: "", mode: "auto", showAlt: false, directionView: "range" },
   layers: {},
   drawingDefaults: { color: "#2962ff", width: 2, dash: "solid" },
+  chartFavorites: [],        // chart types starred with a long tap in the Chart type sheet
+  chartTypeTipSeen: false,
+  layouts: [],               // saved chart layouts (market, timeframe, chart type, indicators, panes, compared markets)
+  currentLayout: null,
+  indicatorTemplates: [],    // named sets of indicators
   lastSymbol: "BTCUSDT",
   lastTf: "1h",
   tourDone: false, // the first-visit tour; set to true when it is finished or skipped

@@ -17,7 +17,8 @@ os.environ.update(
     ENV="test", SECRET_KEY="test-secret-key-for-unit-tests-only-0123456789", DATA_DIR=str(TMP), ENABLE_BACKGROUND="0",
     ADMIN_EMAIL="owner@streixcorp.com", ADMIN_PASSWORD="Admin-Pass-2026!", FRONTEND_URL="http://localhost:3000",
     PAYSTACK_SECRET_KEY="sk_test_abc", PAYSTACK_DVA_ENABLED="1", OPAY_MERCHANT_ID="256612345678901",
-    OPAY_PUBLIC_KEY="OPAYPUB123", OPAY_SECRET_KEY="OPAYSEC456", AI_PROVIDER="auto", ANTHROPIC_API_KEY="",
+    OPAY_PUBLIC_KEY="OPAYPUB123", OPAY_SECRET_KEY="OPAYSEC456", AI_PROVIDER="auto", ANTHROPIC_API_KEY="", GEMINI_API_KEY="",
+    API_RATE_PER_MIN="1000000",                      # the whole suite runs from one address
     GURU_BRAIN_PATH=os.environ.get("TEST_BRAIN", str(TMP / "none.joblib")),
     MANUAL_ACCOUNTS=json.dumps([{"bank": "OPay", "number": "9160309499", "name": "NIMI DOUMOYO MEREMUBIO"},
                                 {"bank": "UBA", "number": "2385227704", "name": "NIMI DOUMOYO MEREMUBIO"}]))
@@ -40,7 +41,7 @@ PS = fake_web.FakePaystack("sk_test_abc")
 paystack.set_client(httpx.Client(transport=httpx.MockTransport(PS.handler)))
 OP = fake_web.FakeOPay("OPAYPUB123", "OPAYSEC456", "256612345678901")
 opay.set_client(httpx.Client(transport=httpx.MockTransport(OP.handler)))
-streixai.set_client(httpx.Client(transport=httpx.MockTransport(fake_web.anthropic_handler)))
+streixai.set_client(httpx.Client(transport=httpx.MockTransport(fake_web.ai_handler)))
 
 H = {"X-Requested-With": "streix"}
 RESULTS = []
@@ -306,7 +307,127 @@ def t_ai_claude(c):
         check("unavailable" in text and "Leverage" in text, text[:200])
     finally:
         settings.anthropic_api_key = None
-        streixai.set_client(httpx.Client(transport=httpx.MockTransport(fake_web.anthropic_handler)))
+        streixai.set_client(httpx.Client(transport=httpx.MockTransport(fake_web.ai_handler)))
+
+
+def t_gemini(c):
+    """Gemini answers when it is the model with a key, and takes over when the first model is down."""
+    signup(c, "gemini@example.com")
+    settings.gemini_api_key = "g-test"
+    try:
+        check(streixai.provider() == "gemini" and streixai.providers() == ["gemini"], streixai.providers())
+        text, ev = sse_text(c.post("/api/ai/chat", json=dict(message="What is a liquidity sweep?"), headers=H))
+        meta = [e for e in ev if e["t"] == "meta"][0]
+        check(meta["provider"] == "gemini" and meta["model"] == settings.gemini_model_fast and "liquidity sweep" in text,
+              (meta, text[:200]))
+        settings.anthropic_api_key = "fail"                  # Claude first in line, but overloaded
+        check(streixai.providers() == ["anthropic", "gemini"], streixai.providers())
+        text, ev = sse_text(c.post("/api/ai/chat", json=dict(message="What is a liquidity sweep?"), headers=H))
+        meta = [e for e in ev if e["t"] == "meta"][0]
+        check(meta["provider"] == "gemini" and "unavailable" not in text and "liquidity sweep" in text, (meta, text[:200]))
+        settings.ai_provider = "gemini"
+        check(streixai.providers() == ["gemini", "anthropic"], "AI_PROVIDER puts its model first")
+    finally:
+        settings.gemini_api_key = None
+        settings.anthropic_api_key = None
+        settings.ai_provider = "auto"
+
+
+def t_sweeps(_c):
+    """After a stop, a call is watched until its time is up: reaching the target afterwards is a stop sweep."""
+    import numpy as np
+
+    from app.services import excursion as ex
+    t = np.arange(10) * 60
+    h = np.array([100.5, 100, 99, 99.5, 101, 104.5, 104, 103, 102, 101.0])
+    lo = np.array([99.5, 99, 97.5, 97.2, 99, 101, 103, 102, 101, 100.0])
+    check(ex.excursions(t, h, lo, "long", 0, 100.0, 120, 2.0) == (1.25, 0.25), "worst and best while open")
+    s = ex.after_stop(t, h, lo, "long", 98, 104, 120, 600, 2.0, 700)
+    check(s["swept"] is True and abs(s["depth_r"] - 0.4) < 1e-9 and s["final"], s)
+    s = ex.after_stop(t, h, lo, "long", 98, 110, 120, 600, 2.0, 700)
+    check(s["swept"] is False and s["final"], ("no target after the stop: not a sweep", s))
+    s = ex.after_stop(t, h, lo, "long", 98, 110, 120, 600, 2.0, 400)
+    check(s["swept"] is None and not s["final"], ("still being watched", s))
+    s = ex.after_stop(t, 200 - lo, 200 - h, "short", 102, 96, 120, 600, 2.0, 700)
+    check(s["swept"] is True and abs(s["depth_r"] - 0.4) < 1e-9, ("short", s))
+
+
+def t_selflearn(_c):
+    """The self-learning check: sweep statistics, the note beside an analysis, and no probability shown until it has
+    beaten the plain win rate on calls it has not seen."""
+    import random
+
+    from app.services import selflearn as sl
+    rnd = random.Random(1)
+    rows = []
+    for i in range(240):
+        win = rnd.random() < 0.45
+        swept = None if win else rnd.random() < 0.3
+        rows.append(dict(id=i, kind="analysis", symbol="BTCUSDT", tf="1h", grade=rnd.choice(["A", "B", "C"]), side="long",
+                         type="limit", entry=100, sl=98, tp=104, p_tp=0.4, called=True, outcome="tp" if win else "sl",
+                         r=2.0 if win else -1.05, swept=swept, depth=rnd.random() * 0.8 if swept else 0.3, post_final=True,
+                         mae=0.5, cls="crypto"))
+    m = sl.train(rows)
+    ov = m["sweeps"]["overall"]
+    check(m["settled"] == 240 and ov["stopped"] > 50 and 0 < ov["rate"] < 1 and ov["depth_p75"] > 0, ov)
+    check(m["ship"] is False and m["weights"] is not None, "random outcomes must not ship a probability check")
+    res = dict(tf="1h", symbol="BTCUSDT", decimals=2, meta=dict(asset_class="crypto"), verdict=dict(grade="A", trade=True),
+               plan=dict(side="long", type="limit", entry=100.0, sl=98.0, tps=[103.0, 104.0], p_tp=[0.5, 0.4]))
+    note = sl.note_for(res, m)
+    check(note and "p_win" not in note and note["sweep"]["wider_sl"] < 98 and "swept" in note["message"], note)
+    check(sl.note_for(res, sl.train(rows[:10])) is None, "too few calls: nothing to say")
+
+
+def t_admin_accounts(c):
+    """Admins suspend (signed out at once, sign-in refused with the reason), unsuspend and delete accounts."""
+    signup(c, "suspect@example.com")
+    adm = client()
+    check(adm.post("/api/auth/login", json=dict(email="owner@streixcorp.com", password="Admin-Pass-2026!"),
+                   headers=H).status_code == 200, "admin login")
+    uid = c.get("/api/auth/me").json()["user"]["id"]
+    r = adm.post(f"/api/admin/users/{uid}/suspend", json=dict(reason="chargeback"), headers=H)
+    check(r.status_code == 200 and r.json()["user"]["is_active"] is False and r.json()["user"]["suspended_reason"] == "chargeback", r.text)
+    check(c.get("/api/auth/me").json()["user"] is None, "a suspended account is signed out at once")
+    r = client().post("/api/auth/login", json=dict(email="suspect@example.com", password="Trade-2026x"), headers=H)
+    check(r.status_code == 403 and "suspended" in r.text and "chargeback" in r.text, r.text)
+    me = adm.get("/api/auth/me").json()["user"]["id"]
+    check(adm.post(f"/api/admin/users/{me}/suspend", json={}, headers=H).status_code == 409, "not yourself")
+    check(adm.post(f"/api/admin/users/{uid}/unsuspend", headers=H).status_code == 200, "unsuspend")
+    c2 = client()
+    check(c2.post("/api/auth/login", json=dict(email="suspect@example.com", password="Trade-2026x"), headers=H).status_code == 200,
+          "signs in again after unsuspend")
+    r = adm.request("DELETE", f"/api/admin/users/{uid}", json=dict(confirm="wrong@example.com"), headers=H)
+    check(r.status_code == 422, r.text)
+    r = adm.request("DELETE", f"/api/admin/users/{uid}", json=dict(confirm="Suspect@example.com"), headers=H)
+    check(r.status_code == 200 and r.json()["deleted"] == "suspect@example.com", r.text)
+    check(c2.get("/api/auth/me").json()["user"] is None, "the deleted account's session is gone")
+    r = client().post("/api/auth/login", json=dict(email="suspect@example.com", password="Trade-2026x"), headers=H)
+    check(r.status_code == 401, r.text)
+    users = adm.get("/api/admin/users?q=suspect").json()["users"]
+    check(not users, users)
+    check(c2.post("/api/admin/users/1/suspend", json={}, headers=H).status_code in (401, 403), "admins only")
+
+
+def t_security(c):
+    """Strict headers on every response, a cap on request size, and an account that locks under password guessing."""
+    from app.security import account_failures, login_limiter
+    r = c.get("/api/health")
+    for k in ("X-Content-Type-Options", "X-Frame-Options", "Content-Security-Policy", "Referrer-Policy"):
+        check(k.lower() in {x.lower() for x in r.headers}, (k, dict(r.headers)))
+    r = c.post("/api/auth/login", content=b"x" * (9 * 1024 * 1024), headers={**H, "content-type": "application/json"})
+    check(r.status_code == 413, r.status_code)
+    signup(c, "guessme@example.com")
+    for i in range(22):
+        login_limiter.hits.clear()          # every guess from a "different" address
+        r = client().post("/api/auth/login", json=dict(email="guessme@example.com", password=f"wrong-{i}x"), headers=H)
+    check(r.status_code == 429 and "Too many wrong passwords" in r.text, r.text)
+    login_limiter.hits.clear()
+    r = client().post("/api/auth/login", json=dict(email="guessme@example.com", password="Trade-2026x"), headers=H)
+    check(r.status_code == 429, "locked even with the right password until the lock ends")
+    account_failures.hits.clear()
+    login_limiter.hits.clear()
+    r = client().post("/api/auth/login", json=dict(email="guessme@example.com", password="Trade-2026x"), headers=H)
+    check(r.status_code == 200, r.text)
 
 
 def _db():
@@ -1144,6 +1265,11 @@ def main():
         run("t_psychology", t_psychology, None)
         run("t_replay_decisions", t_replay_decisions, client())
         run("t_behaviour_model", t_behaviour_model, None)
+        run("t_gemini", t_gemini, client())
+        run("t_sweeps", t_sweeps, None)
+        run("t_selflearn", t_selflearn, None)
+        run("t_admin_accounts", t_admin_accounts, client())
+        run("t_security", t_security, client())
         for t in (t_terms_and_site, t_stage2, t_practice, t_strategy, t_scalp_template, t_tracker_rules, t_track_record, t_alerts, t_push, t_replay,
                   t_learning_export):
             run(t.__name__, t, client())

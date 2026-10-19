@@ -13,8 +13,9 @@ from ..config import settings
 from ..db import get_db
 from ..deps import client_ip, current_user, optional_user
 from ..models import OAuthAccount, Organization, User, WatchItem, jdump, utcnow
-from ..security import (clear_session_cookie, hash_password, login_limiter, make_token, password_problem,
-                        random_code, set_session_cookie, sha256, sign, signup_limiter, unsign, verify_password)
+from ..security import (ACCOUNT_LOCK_AFTER, account_failures, clear_session_cookie, hash_password, login_limiter,
+                        make_token, password_problem, random_code, set_session_cookie, sha256, sign, signup_limiter,
+                        suspended_message, unsign, verify_password)
 from ..serialize import touch_streak, user_out
 from ..services import mailer, oauth
 
@@ -156,14 +157,18 @@ def login(body: LoginIn, request: Request, db: Session = Depends(get_db)):
     email = body.email.strip().lower()
     if not login_limiter.hit(f"{client_ip(request)}|{email}"):
         raise HTTPException(429, "Too many attempts. Wait 15 minutes and try again.")
+    # an account under a password-guessing attack locks for a while, whichever addresses the guesses come from
+    if account_failures.count(email) >= ACCOUNT_LOCK_AFTER:
+        raise HTTPException(429, "Too many wrong passwords for this account. Wait 30 minutes, or reset your password.")
     u = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
     if not u or not verify_password(body.password, u.password_hash):
         if u and not u.password_hash:
             raise HTTPException(401, "This account uses Google or LinkedIn sign-in. Use that button, or reset your "
                                      "password to add one.")
+        account_failures.hit(email)
         raise HTTPException(401, "Wrong email or password.")
     if not u.is_active:
-        raise HTTPException(403, "This account is disabled. Contact support.")
+        raise HTTPException(403, suspended_message(u))
     return session_response(db, u, request=request)
 
 
@@ -357,7 +362,7 @@ def oauth_callback(provider: str, request: Request, code: str | None = None, sta
             is_new = True
         db.add(OAuthAccount(user_id=user.id, provider=provider, subject=prof["sub"], email=prof["email"]))
     if not user or not user.is_active:
-        return fail("This account is disabled.")
+        return fail(suspended_message(user) if user else "This account is disabled.")
     if prof["email_verified"]:
         user.email_verified = True
     if not user.avatar_url and prof["picture"]:

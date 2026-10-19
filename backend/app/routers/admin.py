@@ -45,6 +45,7 @@ def stats(admin: User = Depends(admin_user), db: Session = Depends(get_db)):
 
 def _user_row(u):
     return dict(id=u.id, email=u.email, name=u.name, experience=u.experience, role=u.role, is_active=u.is_active,
+                suspended_at=iso(u.suspended_at), suspended_reason=u.suspended_reason,
                 tier=tier_of(u), plan=u.plan, plan_expires_at=iso(u.plan_expires_at), trial_ends_at=iso(u.trial_ends_at),
                 org=u.org.name if u.org else None, org_role=u.org_role, created_at=iso(u.created_at),
                 last_seen_at=iso(u.last_seen_at), streak_days=u.streak_days, phone=u.phone)
@@ -89,6 +90,9 @@ def patch_user(user_id: int, body: UserPatch, admin: User = Depends(admin_user),
         u.is_active = body.is_active
         if not body.is_active:
             u.token_version += 1
+            u.suspended_at = u.suspended_at or utcnow()
+        else:
+            u.suspended_at, u.suspended_reason = None, None
     if body.pro_days:
         base = u.plan_expires_at if (u.plan == "pro" and u.plan_expires_at and u.plan_expires_at > now) else now
         u.plan, u.plan_expires_at = "pro", base + timedelta(days=body.pro_days)
@@ -100,6 +104,79 @@ def patch_user(user_id: int, body: UserPatch, admin: User = Depends(admin_user),
     billing.audit(db, "user_updated", u.email, body.model_dump(exclude_none=True), admin.id)
     db.commit()
     return dict(user=_user_row(u))
+
+
+class SuspendIn(BaseModel):
+    reason: str | None = Field(None, max_length=200)
+
+
+def _target(db, admin, user_id, verb):
+    u = db.get(User, user_id)
+    if not u:
+        raise HTTPException(404, "User not found.")
+    if u.id == admin.id:
+        raise HTTPException(409, f"You can't {verb} your own account.")
+    if u.role == "admin" and settings.admin_email and u.email == settings.admin_email:
+        raise HTTPException(409, f"The owner account (ADMIN_EMAIL) can't be {verb}ed here.")
+    return u
+
+
+@router.post("/users/{user_id}/suspend")
+def suspend(user_id: int, body: SuspendIn, admin: User = Depends(admin_user), db: Session = Depends(get_db)):
+    """Suspend an account: it is signed out everywhere at once and cannot sign in or use the API until unsuspended.
+    Its data is kept."""
+    u = _target(db, admin, user_id, "suspend")
+    u.is_active = False
+    u.token_version += 1                       # every session token the account holds stops working now
+    u.suspended_at = utcnow()
+    u.suspended_reason = (body.reason or "").strip() or None
+    billing.audit(db, "user_suspended", u.email, dict(reason=u.suspended_reason), admin.id)
+    db.commit()
+    return dict(user=_user_row(u))
+
+
+@router.post("/users/{user_id}/unsuspend")
+def unsuspend(user_id: int, admin: User = Depends(admin_user), db: Session = Depends(get_db)):
+    u = db.get(User, user_id)
+    if not u:
+        raise HTTPException(404, "User not found.")
+    u.is_active, u.suspended_at, u.suspended_reason = True, None, None
+    billing.audit(db, "user_unsuspended", u.email, None, admin.id)
+    db.commit()
+    return dict(user=_user_row(u))
+
+
+class DeleteIn(BaseModel):
+    confirm: str = Field(min_length=3, max_length=255)       # the account's email, typed again
+
+
+@router.delete("/users/{user_id}")
+def delete_user(user_id: int, body: DeleteIn, admin: User = Depends(admin_user), db: Session = Depends(get_db)):
+    """Delete an account for good: the user, their sign-in links, settings, drawings, alerts, chats, saved analyses and
+    payments go. The analyses the app gave stay in the learning record without the account (user_id becomes empty),
+    like donations and support tickets."""
+    u = _target(db, admin, user_id, "delete")
+    if body.confirm.strip().lower() != u.email.lower():
+        raise HTTPException(422, "Type the account's email exactly to confirm.")
+    email = u.email
+    from sqlalchemy import delete, update
+
+    from ..models import (Alert, ChatMessage as Chat, Donation, Notification, OAuthAccount, PracticeAttempt,
+                          PushSubscription, SavedAnalysis, SavedDrawing, SavedStrategy, SupportTicket, UsageCounter,
+                          VirtualAccount, WatchItem)
+    # explicit, so it works the same on databases without ON DELETE support switched on
+    for model in (OAuthAccount, VirtualAccount, UsageCounter, Chat, SavedDrawing, SavedAnalysis, WatchItem,
+                  PracticeAttempt, SavedStrategy, Alert, Notification, PushSubscription, Payment):
+        db.execute(delete(model).where(model.user_id == u.id))
+    for model in (AnalysisLog, Donation, SupportTicket):
+        db.execute(update(model).where(model.user_id == u.id).values(user_id=None))
+    org = u.org
+    if org is not None and org.owner_id == u.id:
+        org.owner_id = None
+    db.delete(u)
+    billing.audit(db, "user_deleted", email, None, admin.id)
+    db.commit()
+    return dict(ok=True, deleted=email)
 
 
 @router.post("/users/{user_id}/password")
@@ -334,11 +411,44 @@ def learning(admin: User = Depends(admin_user), db: Session = Depends(get_db)):
     good = db.execute(select(func.count(PracticeAttempt.id)).where(PracticeAttempt.score >= LEARN_MIN_SCORE)).scalar()
     last = db.execute(select(AdminAction).where(AdminAction.action == "learning_export")
                       .order_by(AdminAction.id.desc()).limit(1)).scalar_one_or_none()
-    return dict(calls=dict(resolved=resolved, by_outcome={(k or "untracked"): v for k, v in by.items()}),
+    from ..services import journal, selflearn
+    sweeps = db.execute(select(func.count(AnalysisLog.id)).where(AnalysisLog.outcome == "sl", AnalysisLog.swept.is_(True))).scalar()
+    stopped = db.execute(select(func.count(AnalysisLog.id)).where(AnalysisLog.outcome == "sl",
+                                                                AnalysisLog.post_final.is_(True))).scalar()
+    sl_model = selflearn.load()
+    return dict(calls=dict(resolved=resolved, by_outcome={(k or "untracked"): v for k, v in by.items()},
+                           stopped_watched=stopped, swept=sweeps),
+                journal=journal.stats(),
+                selflearn=None if not sl_model else {k: sl_model.get(k) for k in ("created", "settled", "ship", "reason",
+                                                                                   "win_rate", "by_grade", "sweeps", "card")},
                 practice=dict(total=prac, accurate=good, min_score=LEARN_MIN_SCORE),
                 last_export=dict(at=iso(last.created_at), detail=jload(last.detail, None)) if last else None,
-                note="Exports are for offline retraining in the notebook. Nothing is learned automatically: a new "
-                     "brain only goes live when you upload it after checking its out-of-sample report.")
+                note="The analyst checks its own record by itself: every few hours it relearns which of its calls won "
+                     "and how often its stops were swept, and shows that beside new analyses. The brain itself never "
+                     "changes on its own: retrain it in the notebook from these files, and upload it only when its "
+                     "out-of-sample report is better.")
+
+
+@router.post("/learning/retrain")
+def learning_retrain(admin: User = Depends(admin_user), db: Session = Depends(get_db)):
+    """Learn again now from every settled call (the server also does this every six hours)."""
+    from ..services import selflearn
+    m = selflearn.retrain(db)
+    billing.audit(db, "selflearn_retrain", None, dict(settled=m.get("settled"), ship=m.get("ship")), admin.id)
+    db.commit()
+    return {k: m.get(k) for k in ("created", "settled", "ship", "reason", "win_rate", "by_grade", "sweeps", "card")}
+
+
+@router.get("/learning/journal")
+def learning_journal(admin: User = Depends(admin_user), db: Session = Depends(get_db)):
+    """The journal file: every settled call (consenting accounts), one JSON object per line."""
+    from ..services import journal
+    p = journal.path()
+    if not p.exists():
+        raise HTTPException(404, "The journal is empty so far: calls are written to it as they settle.")
+    billing.audit(db, "journal_download", None, journal.stats(), admin.id)
+    db.commit()
+    return FileResponse(p, media_type="application/x-ndjson", filename=f"streix-journal-{utcnow():%Y%m%d-%H%M}.jsonl")
 
 
 @router.get("/learning/export")
@@ -384,7 +494,8 @@ def learning_export(dataset: str = "calls", min_score: int = LEARN_MIN_SCORE, ad
             return dict(id=r.id, created_at=iso(r.created_at), symbol=r.symbol, tf=r.tf, side=r.side, type=r.plan_type,
                         called=r.called, grade=r.grade, entry=r.entry, sl=r.sl, tp=r.tp, p_tp=r.p_tp,
                         outcome=r.outcome, r=r.outcome_r, filled_at=iso(r.filled_at), outcome_at=iso(r.outcome_at),
-                        exit=r.exit_price, analysis=jload(r.summary, None))
+                        exit=r.exit_price, kind=r.kind, mae_r=r.mae_r, mfe_r=r.mfe_r, swept=r.swept,
+                        sweep_depth_r=r.sweep_depth_r, analysis=jload(r.summary, None))
     else:
         consenting = select(User.id).where(User.learn_consent.is_(True))
         rows = db.execute(select(PracticeAttempt).where(PracticeAttempt.score >= max(0, min(100, min_score)),

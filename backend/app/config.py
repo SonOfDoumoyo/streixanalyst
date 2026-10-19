@@ -63,6 +63,11 @@ class Settings:
         self.cookie_domain = env("COOKIE_DOMAIN")
         self.cookie_samesite = env("COOKIE_SAMESITE", "lax")
         self.session_days = env_int("SESSION_DAYS", 30)
+        # abuse protection (see docs/SECURITY.md): requests per minute from one address, the largest request body,
+        # and whether the API's interactive docs are served in production
+        self.api_rate_per_min = env_int("API_RATE_PER_MIN", 900)
+        self.max_body_mb = env_int("MAX_BODY_MB", 8)
+        self.enable_docs = env_bool("ENABLE_DOCS", not self.production)
 
         data_dir = Path(env("DATA_DIR", str(BASE_DIR / "data")))
         self.data_dir = data_dir
@@ -86,13 +91,18 @@ class Settings:
         self.linkedin_client_id = env("LINKEDIN_CLIENT_ID")
         self.linkedin_client_secret = env("LINKEDIN_CLIENT_SECRET")
 
-        self.ai_provider = env("AI_PROVIDER", "auto")        # auto | anthropic | openai | offline
+        self.ai_provider = env("AI_PROVIDER", "auto")        # auto | anthropic | gemini | openai | offline
         self.anthropic_api_key = env("ANTHROPIC_API_KEY")
         self.anthropic_model = env("STREIXAI_MODEL", "claude-sonnet-5-5")
         self.anthropic_model_fast = env("STREIXAI_MODEL_FAST", "claude-haiku-5-5")
         self.openai_api_key = env("OPENAI_API_KEY")
         self.openai_base_url = env("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
         self.openai_model = env("OPENAI_MODEL", "gpt-4o-mini")
+        # Google Gemini (key from Google AI Studio). Free-plan users get the fast model.
+        self.gemini_api_key = env("GEMINI_API_KEY")
+        self.gemini_model = env("GEMINI_MODEL", "gemini-3.5-flash")
+        self.gemini_model_fast = env("GEMINI_MODEL_FAST", self.gemini_model)
+        self.gemini_base_url = env("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta").rstrip("/")
         self.ai_max_tokens = env_int("AI_MAX_TOKENS", 1200)
 
         self.paystack_secret_key = env("PAYSTACK_SECRET_KEY")

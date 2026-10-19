@@ -12,7 +12,9 @@ const STEPS = [
   { title: "Read the verdict", body: "The grade (A+ to D) shows how many things line up. A good grade is never a guarantee.", target: "verdict" },
   { title: "The bull and bear bar", body: "It shows the model's view of the next 24 candles: range vs trend, or the lean. Pick one, or hide it.", target: "direction" },
   { title: "Your trade plan", body: "Entry, stop and targets, with the risk for your account size. Set your risk in Settings.", target: "plan" },
-  { title: "Test a strategy", body: "The sliders button opens the Strategy lab on this market and timeframe. Write your own rules, such as EMA trend plus RSI, and test them with a backtest. Every plan has it.", target: "strategy" },
+  { title: "Test a strategy", body: "The sliders button opens the Strategy lab on this market and timeframe (on a phone, it is in the hub). Write your own rules, such as EMA trend plus RSI, and test them with a backtest. Every plan has it.", target: "strategy" },
+  { title: "The analysis hub", body: "Chart types, indicators and templates, compare, saved layouts, the object tree, technicals and trading at your broker.", target: "hub" },
+  { title: "The crosshair", body: "Hold the chart to bring up the crosshair. Drag anywhere to move it; it stays when you let go. Tap its + for a line or an alert at that price, and tap the chart to remove it.", target: null },
   { title: "You are set", body: "Analyse a few charts, then test your reading in Draw & score. You can replay this tour any time.", target: null },
 ];
 

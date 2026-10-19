@@ -8,7 +8,7 @@ import ChartView from "@/components/chart/ChartView";
 import { useAuth } from "@/components/Providers";
 import { Menu, Modal } from "@/components/ui";
 import Paywall from "@/components/Paywall";
-import AlertsBell from "@/components/AlertsBell";
+import AlertsBell, { requestAlert } from "@/components/AlertsBell";
 import { APP_LINKS } from "@/components/SubNav";
 import { ApiError, del, get, post, put, qs } from "@/lib/api";
 import { ANALYSIS_STEPS, gradeClass, toOverlay, toUserDrawings, verdictTone } from "@/lib/analysis";
@@ -25,9 +25,13 @@ import CrossMenu from "./CrossMenu";
 import DivergencePanel from "./DivergencePanel";
 import ReplayPanel from "./ReplayPanel";
 import { chartThemeFor } from "@/lib/chartTheme";
+import { CHART_TYPES } from "@/components/chart/series";
+import ChartTypeSheet, { ChartTypeIcon } from "./ChartTypeSheet";
+import { AnalysisHub, BrokerPanel, ComparePanel, IndicatorsPanel, LayoutPanel, LayoutsPanel, ObjectTreePanel, SymbolDetailsPanel,
+  TechnicalsPanel } from "./HubPanels";
 
-const STYLES = [["candles", "Candles"], ["hollow", "Hollow candles"], ["heikin", "Heikin Ashi"], ["bars", "OHLC bars"], ["line", "Line"], ["area", "Area"]];
-const INDICATORS = [["ema20", "EMA 20"], ["ema50", "EMA 50"], ["ema200", "EMA 200"], ["bb", "Bollinger Bands"], ["vwap", "VWAP (intraday)"]];
+const COMPARE_COLORS = ["#f5a524", "#b78bff", "#3fb8ff", "#ff6bcb"];
+const LAYOUT_KEYS = ["volume", "rsi", "logScale", "grid", "killzones", "watermark"];
 const TABS = [["analysis", "Analysis", "zap"], ["replay", "Replay", "clock"], ["ai", "StreixAI", "sparkles"], ["watchlist", "Watchlist", "list"], ["news", "News", "news"], ["divergence", "Divergence", "candles"]];
 const utcLabel = (iso) => `${iso.replace("T", " ").slice(0, 16)} UTC`;
 
@@ -51,6 +55,22 @@ function dropAnalysisLocal(sym, frame) {
   const all = localGet(ANALYSES_KEY, {}) || {};
   delete all[analysisKey(sym, frame)];
   localSet(ANALYSES_KEY, all);
+}
+
+// Candles, retried on a failed or timed-out request: one dropped connection should not leave the chart empty.
+async function fetchCandles(params, tries = 3) {
+  let last = null;
+  for (let k = 0; k < tries; k++) {
+    try {
+      return await get(`/market/candles?${qs(params)}`);
+    } catch (err) {
+      last = err;
+      const st = err instanceof ApiError ? err.status : 0;
+      if ([400, 401, 402, 403, 422].includes(st) || (st === 404 && k >= 1)) throw err;
+      await new Promise((r) => setTimeout(r, 600 * (k + 1)));
+    }
+  }
+  throw last;
 }
 
 function useWidth() {
@@ -104,6 +124,11 @@ export default function Terminal() {
   const [pendingAsk, setPendingAsk] = useState(null);
   const [menu, setMenu] = useState(null);
   const [fullscreen, setFullscreen] = useState(false);
+  // TradingView-style sheets: chart types, the analysis hub and the panels it opens
+  const [sheet, setSheet] = useState(null);
+  const [compare, setCompare] = useState(() => (localGet("sa_compare", []) || []).filter((c) => c && c.symbol).slice(0, 4));
+  const [drawList, setDrawList] = useState([]);
+  const [analysisOn, setAnalysisOn] = useState(true);
   const eng = useRef(null);
   const [engReady, setEngReady] = useState(false);
   const barsRef = useRef(600);
@@ -138,6 +163,7 @@ export default function Terminal() {
       const d = eng.current && eng.current.drawings.find((x) => x.id === data);
       setTextEdit({ id: data, value: (d && d.style.text) || "" });
     } else if (type === "drawings") {
+      setDrawList(data);
       clearTimeout(saveTimer.current);
       const sym = symbolRef.current;
       localSet(`sa_draw_${sym}`, data);
@@ -232,7 +258,7 @@ export default function Terminal() {
     e.clearAnalysis();
     barsRef.current = 600;
     try {
-      const d = await get(`/market/candles?${qs(rp ? { symbol: sym, tf: frame, bars: 600, at: rp.at, ahead: rp.ahead } : { symbol: sym, tf: frame, bars: 600 })}`);
+      const d = await fetchCandles(rp ? { symbol: sym, tf: frame, bars: 600, at: rp.at, ahead: rp.ahead } : { symbol: sym, tf: frame, bars: 600 });
       if (sym !== symbolRef.current || frame !== tfRef.current) return;
       e.setData(d.candles, { tfSec: d.tf_seconds, decimals: d.decimals, label: `${d.display} · ${frame}`, keepWidth: true });
       setMeta(d);
@@ -250,9 +276,13 @@ export default function Terminal() {
     const cached = localGet(`sa_draw_${sym}`, null);
     if (cached) e.setDrawings(cached);
     else e.setDrawings([]);
+    setDrawList(e.getDrawings());
     get(`/user/drawings?${qs({ symbol: sym })}`).then((dd) => {
       if (sym !== symbolRef.current) return;
-      if (dd.updated_at || !cached) e.setDrawings(dd.items || []);
+      if (dd.updated_at || !cached) {
+        e.setDrawings(dd.items || []);
+        setDrawList(e.getDrawings());
+      }
     }).catch(() => {});
   }, []);
 
@@ -265,8 +295,8 @@ export default function Terminal() {
     const frame = tfRef.current;
     const rp = replayRef.current;
     try {
-      const d = await get(`/market/candles?${qs(rp ? { symbol: sym, tf: frame, bars: want, at: rp.at, ahead: rp.ahead } : { symbol: sym, tf: frame, bars: want })}`);
-      if (sym === symbolRef.current && frame === tfRef.current && d.candles.length > e.d.length) {
+      const d = await fetchCandles(rp ? { symbol: sym, tf: frame, bars: want, at: rp.at, ahead: rp.ahead } : { symbol: sym, tf: frame, bars: want }, 2);
+      if (sym === symbolRef.current && frame === tfRef.current && d.candles.length > e.raw.length) {
         e.setData(d.candles, { tfSec: d.tf_seconds, decimals: d.decimals, keepView: true });
         barsRef.current = want;
       } else barsRef.current = 5000;
@@ -287,6 +317,25 @@ export default function Terminal() {
     if (settings.lastSymbol !== symbol || settings.lastTf !== tf) updateSettings({ lastSymbol: symbol, lastTf: tf });
   }, [engReady, symbol, tf, replayKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The whole series again, keeping the view: used when live updates find candles missing (the phone slept, the tab
+  // was in the background, the network dropped), so the chart never keeps a hole until it is reloaded.
+  const lastResync = useRef(0);
+  const resync = useCallback(async (force = false) => {
+    const e = eng.current;
+    if (!e || !e.raw.length || replayRef.current) return;
+    const now = Date.now();
+    if (!force && now - lastResync.current < 8000) return;
+    lastResync.current = now;
+    const sym = symbolRef.current;
+    const frame = tfRef.current;
+    try {
+      const d = await fetchCandles({ symbol: sym, tf: frame, bars: Math.max(600, Math.min(5000, e.raw.length)) }, 2);
+      if (sym !== symbolRef.current || frame !== tfRef.current || replayRef.current || !eng.current) return;
+      eng.current.setData(d.candles, { tfSec: d.tf_seconds, decimals: d.decimals, keepView: true });
+      setMeta((m) => (m ? { ...m, price: d.price } : m));
+    } catch { /* the next live update tries again */ }
+  }, []);
+
   // live updates
   useEffect(() => {
     if (!engReady || chartState.error || chartState.loading || !meta || replayKey !== "live") return undefined;
@@ -296,8 +345,9 @@ export default function Terminal() {
       if (document.hidden || !alive) return;
       try {
         const d = await get(`/market/latest?${qs({ symbol, tf })}`);
-        if (!alive || !eng.current || symbolRef.current !== symbol) return;
-        eng.current.updateTail(d.candles);
+        if (!alive || !eng.current || symbolRef.current !== symbol || tfRef.current !== tf) return;
+        const upd = eng.current.updateTail(d.candles);
+        if (upd && upd.gap) resync();
         setMeta((m) => (m ? { ...m, price: d.price } : m));
         const r = resRef.current;
         if (r && r.candles && d.candles.length) {
@@ -308,9 +358,17 @@ export default function Terminal() {
       } catch { /* keep trying */ }
     };
     const t = setInterval(tick, every);
+    // back on the page after the phone slept or another tab was open: fill in what was missed straight away
+    const onVis = () => {
+      if (!document.hidden && alive) resync(true).then(tick);
+    };
+    document.addEventListener("visibilitychange", onVis);
+    window.addEventListener("online", onVis);
     return () => {
       alive = false;
       clearInterval(t);
+      document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("online", onVis);
     };
   }, [engReady, symbol, tf, meta && meta.asset_class, chartState.loading, chartState.error, replayKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -342,12 +400,26 @@ export default function Terminal() {
     }
   };
   const showLimit = useCallback((e) => setPaywall({ message: e.message, detail: e.detail }), []);
-  const lineAt = (at) => {
+  const lineAt = (at, type = "hline") => {
     const e = eng.current;
     setCrossMenu(null);
     if (!e) return;
     const def = e.drawingDefaults || { color: "#2962ff", width: 2, dash: "solid" };
-    e.select(e.addDrawing({ type: "hline", points: [{ t: at.time, p: at.price }], style: { ...def } }));
+    e.select(e.addDrawing({ type, points: [{ t: at.time, p: at.price }], style: { ...def } }));
+  };
+  const alertForm = (at, op) => {
+    setCrossMenu(null);
+    requestAlert({ symbol: symbolRef.current, tf: tfRef.current, price: Number(Number(at.price).toFixed(at.decimals ?? 2)), op });
+  };
+  const copyPrice = async (at) => {
+    setCrossMenu(null);
+    const p = Number(at.price).toFixed(at.decimals ?? 2);
+    try {
+      await navigator.clipboard.writeText(p);
+      toast(`${p} copied`, "success", 1800);
+    } catch {
+      toast(p, "info");
+    }
   };
   const alertAt = async (at, op) => {
     setCrossMenu(null);
@@ -519,8 +591,8 @@ export default function Terminal() {
     setReview({ open: true, prefill: { side: selDrawing.type, entry: P[0].p, sl: P[1].p, tp: P[2].p } });
   };
   const placeTrade = ({ side, entry, sl, tp }) => {
-    if (!eng.current || !eng.current.d.length) return;
-    const last = eng.current.d[eng.current.d.length - 1].t;
+    if (!eng.current || !eng.current.raw.length) return;
+    const last = eng.current.raw[eng.current.raw.length - 1].t;
     const step = (meta && meta.tf_seconds) || 3600;
     const id = eng.current.addDrawing({ type: side === "short" ? "short" : "long", points: [{ t: last, p: entry }, { t: last + step * 24, p: sl }, { t: last + step * 24, p: tp }], style: {} });
     eng.current.select(id);
@@ -539,6 +611,136 @@ export default function Terminal() {
     if (narrow) setPanelOpen(false);
     toast("Drag the entry, stop or target to change the plan, then tap Review to grade your edits.", "info");
   };
+
+  // ───── compare: other markets drawn over this one, on the same timeframe (and the same replay moment)
+  const compareKey = compare.map((c) => c.symbol).join(",");
+  useEffect(() => {
+    localSet("sa_compare", compare.map(({ symbol: s0, color }) => ({ symbol: s0, color })));
+    if (!engReady || !eng.current) return undefined;
+    if (!compare.length) {
+      eng.current.setCompare([]);
+      return undefined;
+    }
+    let alive = true;
+    const rp = replayRef.current;
+    Promise.all(compare.map((c) => fetchCandles(rp ? { symbol: c.symbol, tf, bars: 600, at: rp.at, ahead: rp.ahead } : { symbol: c.symbol, tf, bars: 600 }, 2)
+      .then((d) => ({ ...c, rows: d.candles, label: d.display, error: null }))
+      .catch((err) => ({ ...c, rows: [], error: err.message || "not available" }))))
+      .then((list) => {
+        if (!alive || !eng.current) return;
+        eng.current.setCompare(list);
+        const bad = list.filter((c) => c.error);
+        if (bad.length) setCompare((cs) => cs.map((c) => ({ ...c, error: (bad.find((b) => b.symbol === c.symbol) || {}).error || null })));
+      });
+    return () => { alive = false; };
+  }, [engReady, compareKey, tf, replayKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const addCompare = (s0) => {
+    const c = cleanSymbol(s0);
+    if (!c || c === symbol || compare.some((x) => x.symbol === c)) return;
+    const used = new Set(compare.map((x) => x.color));
+    setCompare([...compare, { symbol: c, color: COMPARE_COLORS.find((x) => !used.has(x)) || COMPARE_COLORS[0] }].slice(0, 4));
+  };
+  const removeCompare = (s0) => setCompare(compare.filter((c) => c.symbol !== s0));
+
+  // ───── chart layouts: the market, timeframe, chart type, indicators, panes and compared markets, saved by name
+  const layouts = settings.layouts || [];
+  const snapshot = () => ({
+    symbol, tf, style: settings.candles.style, indicators: { ...settings.indicators },
+    chart: Object.fromEntries(LAYOUT_KEYS.map((k) => [k, !!settings.chart[k]])), compare: compare.map((c) => c.symbol),
+  });
+  const saveLayoutAs = (name) => {
+    const id = `l${Date.now().toString(36)}`;
+    const next = [...layouts.filter((l) => l.name !== name), { id, name, ...snapshot(), savedAt: Date.now() }].slice(-12);
+    updateSettings({ layouts: next, currentLayout: id });
+    toast(`Layout “${name}” saved.`, "success");
+    setSheet(null);
+  };
+  const saveLayout = () => {
+    const cur = layouts.find((l) => l.id === settings.currentLayout);
+    if (!cur) {
+      setSheet("layouts");
+      return;
+    }
+    updateSettings({ layouts: layouts.map((l) => (l.id === cur.id ? { ...l, ...snapshot(), savedAt: Date.now() } : l)) });
+    toast(`Layout “${cur.name}” saved.`, "success");
+    setSheet(null);
+  };
+  const openLayout = (l) => {
+    updateSettings({ currentLayout: l.id, candles: { style: l.style || "candles" }, indicators: { ...l.indicators }, chart: { ...l.chart } });
+    setCompare((l.compare || []).slice(0, 4).map((s0, i) => ({ symbol: s0, color: COMPARE_COLORS[i] })));
+    if (l.symbol) setSymbol(cleanSymbol(l.symbol));
+    if (l.tf && TFS.includes(l.tf)) setTf(l.tf);
+    setSheet(null);
+    toast(`Opened “${l.name}”.`, "info", 2200);
+  };
+  const newLayout = () => {
+    updateSettings({ currentLayout: null, candles: { style: "candles" }, indicators: { ema20: false, ema50: true, ema200: true, bb: false, vwap: false },
+      chart: { volume: true, rsi: false, logScale: false, grid: false, killzones: false, watermark: true } });
+    setCompare([]);
+    if (eng.current) eng.current.resetView();
+    setSheet(null);
+    toast("New layout: candles, default indicators. Save it from the hub when you're done.", "info");
+  };
+  const deleteLayout = (id) => updateSettings({ layouts: layouts.filter((l) => l.id !== id), currentLayout: settings.currentLayout === id ? null : settings.currentLayout });
+  const renameLayout = (id, name) => updateSettings({ layouts: layouts.map((l) => (l.id === id ? { ...l, name } : l)) });
+
+  // ───── indicator templates
+  const templates = settings.indicatorTemplates || [];
+  const saveTemplate = (name) => {
+    const next = [...templates.filter((t) => t.name !== name), { name, indicators: { ...settings.indicators }, rsi: !!settings.chart.rsi }].slice(-12);
+    updateSettings({ indicatorTemplates: next });
+    toast(`Indicator set “${name}” saved.`, "success", 2200);
+  };
+  const applyTemplate = (t) => {
+    updateSettings({ indicators: { ...t.indicators }, chart: { rsi: !!t.rsi } });
+    toast(`“${t.name}” applied.`, "info", 2000);
+  };
+  const deleteTemplate = (name) => updateSettings({ indicatorTemplates: templates.filter((t) => t.name !== name) });
+
+  // ───── publish an idea: the chart as a picture, shared with the phone's share sheet (or saved), with the plan
+  const publish = async () => {
+    if (!eng.current) return;
+    setSheet(null);
+    const url = eng.current.screenshot();
+    const plan = res && res.plan;
+    const text = [`${(meta && meta.display) || symbol} · ${tf} · StreixAnalyst`,
+      res ? `${res.verdict.action}${plan ? ` · EP ${fmtPrice(plan.entry, dec)} · SL ${fmtPrice(plan.sl, dec)} · TP ${fmtPrice(plan.tps[0], dec)}` : ""}` : null]
+      .filter(Boolean).join("\n");
+    try {
+      const blob = await (await fetch(url)).blob();
+      const file = new File([blob], `${symbol}-${tf}-idea.png`, { type: "image/png" });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file], text, title: `${symbol} ${tf} idea` });
+        return;
+      }
+    } catch (e) {
+      if (e && e.name === "AbortError") return;
+    }
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${symbol}-${tf}-idea.png`;
+    a.click();
+    try { await navigator.clipboard.writeText(text); } catch { /* ignore */ }
+    toast("Chart image saved, and the idea's text copied to share.", "success");
+  };
+
+  const pickType = (id) => {
+    updateSettings({ candles: { style: id } });
+    setSheet(null);
+  };
+  const objectAct = {
+    select: (id) => { if (eng.current) eng.current.select(id); setSheet(null); },
+    toggle: (id, hidden) => eng.current && eng.current.updateDrawing(id, { hidden }),
+    lock: (id, locked) => eng.current && eng.current.updateDrawing(id, { locked }),
+    del: (id) => eng.current && eng.current.deleteDrawing(id),
+  };
+  const toggleAnalysis = () => {
+    const on = !analysisOn;
+    setAnalysisOn(on);
+    if (eng.current) eng.current.setAnalysisVisible(on);
+  };
+  const back = () => setSheet("hub");
+  const typeLabel = (CHART_TYPES.find((t) => t.id === settings.candles.style) || {}).label || "Candles";
 
   const ent = user && user.entitlements;
   const display = (meta && meta.display) || symbol;
@@ -584,7 +786,7 @@ export default function Terminal() {
   return (
     <div className={`term${narrow ? "" : " term-desk"}`} data-tv={scale > 1 ? "1" : undefined}>
       <header className="topbar">
-        {mobile ? <Link href="/" aria-label="Home"><Mark size={34} /></Link> : <Brand href="/" size={34} compact={width < 1300} />}
+        {mobile ? (width >= 400 ? <Link href="/" aria-label="Home"><Mark size={34} /></Link> : null) : <Brand href="/" size={34} compact={width < 1300} />}
         {!mobile ? <span className="sep" /> : null}
         <button className="symbol-btn" data-tour="market" onClick={() => setSearchOpen(true)} aria-label="Change market">
           <Icon name="search" size={16} style={{ color: "var(--text-3)", flex: "none" }} />
@@ -602,33 +804,22 @@ export default function Terminal() {
             ))}
           </div>
         )}
-        <Link className="icon-btn" href={`/strategy?s=${encodeURIComponent(symbol)}&tf=${tf}`} data-tour="strategy"
-          title="Test a strategy on this market" aria-label="Test a strategy on this market"
-          style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-          <Icon name="sliders" size={16} />
-        </Link>
+        {!mobile ? (
+          <Link className="icon-btn" href={`/strategy?s=${encodeURIComponent(symbol)}&tf=${tf}`} data-tour="strategy"
+            title="Test a strategy on this market" aria-label="Test a strategy on this market"
+            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
+            <Icon name="sliders" size={16} />
+          </Link>
+        ) : null}
+        <button className="icon-btn" onClick={() => setSheet("types")} title={`Chart type: ${typeLabel}`} aria-label={`Chart type: ${typeLabel}`}>
+          <ChartTypeIcon id={settings.candles.style} size={19} />
+        </button>
+        <button className="icon-btn" onClick={() => setSheet("hub")} title="Analysis hub" aria-label="Analysis hub" data-tour="hub">
+          <Icon name="more" />
+        </button>
         {!mobile ? (
           <>
             <span className="sep" />
-            <div style={{ position: "relative" }}>
-              <button className="icon-btn" onClick={() => setMenu(menu === "style" ? null : "style")} title="Chart type"><Icon name="candles" /></button>
-              <Menu open={menu === "style"} onClose={() => setMenu(null)} anchorStyle={{ top: 42, left: 0 }}>
-                <div className="mh">Chart type</div>
-                {STYLES.map(([id, label]) => (
-                  <button key={id} onClick={() => { updateSettings({ candles: { style: id } }); setMenu(null); }}>
-                    <Icon name={settings.candles.style === id ? "check" : "dot"} size={14} style={{ opacity: settings.candles.style === id ? 1 : 0 }} /> {label}
-                  </button>
-                ))}
-                <hr />
-                {[["volume", "Volume"], ["rsi", "RSI pane"], ["logScale", "Log scale"], ["grid", "Grid"], ["killzones", "Killzone windows (London, New York)"]].map(([k, l]) => (
-                  <button key={k} onClick={() => updateSettings({ chart: { [k]: !settings.chart[k] } })}>
-                    <Icon name="check" size={14} style={{ opacity: settings.chart[k] ? 1 : 0 }} /> {l}
-                  </button>
-                ))}
-                <hr />
-                <Link href="/settings#chart"><Icon name="palette" size={16} /> Colours & candles…</Link>
-              </Menu>
-            </div>
             <div style={{ position: "relative" }}>
               <button className="icon-btn" onClick={() => setMenu(menu === "apps" ? null : "apps")} title="Workspaces"><Icon name="grid" /></button>
               <Menu open={menu === "apps"} onClose={() => setMenu(null)} anchorStyle={{ top: 42, left: 0, width: 260 }}>
@@ -639,20 +830,7 @@ export default function Terminal() {
                 <Link href={`/tv?s=${encodeURIComponent(symbol)}&tf=${tf}`}><Icon name="tv" size={16} /> TV / presentation mode</Link>
               </Menu>
             </div>
-            <div style={{ position: "relative" }}>
-              <button className="icon-btn" onClick={() => setMenu(menu === "ind" ? null : "ind")} title="Indicators"><Icon name="indicator" /></button>
-              <Menu open={menu === "ind"} onClose={() => setMenu(null)} anchorStyle={{ top: 42, left: 0 }}>
-                <div className="mh">Indicators</div>
-                {INDICATORS.map(([k, l]) => (
-                  <button key={k} onClick={() => updateSettings({ indicators: { [k]: !settings.indicators[k] } })}>
-                    <Icon name="check" size={14} style={{ opacity: settings.indicators[k] ? 1 : 0 }} /> {l}
-                  </button>
-                ))}
-                <button onClick={() => updateSettings({ chart: { rsi: !settings.chart.rsi } })}>
-                  <Icon name="check" size={14} style={{ opacity: settings.chart.rsi ? 1 : 0 }} /> RSI 14 (pane)
-                </button>
-              </Menu>
-            </div>
+            <button className="icon-btn" onClick={() => setSheet("indicators")} title="Indicators" aria-label="Indicators"><Icon name="indicator" /></button>
           </>
         ) : null}
         <div className="grow" />
@@ -661,10 +839,12 @@ export default function Terminal() {
         {!mobile ? (
           <button className="btn sm hide-mobile" onClick={() => setReview({ open: true, prefill: null })} title="Grade your own trade idea"><Icon name="review" size={15} /> Review</button>
         ) : null}
-        <button className={`btn primary analyse-btn ${busy ? "busy" : ""}`} data-tour="analyse" onClick={analyse} disabled={busy || !!chartState.error} title="Analyse this chart (A)">
-          {busy ? <span className="spinner" /> : <Icon name="zap" size={17} />}
-          <span className="hide-mobile">{busy ? "Analysing" : "Analyse"}</span>
-        </button>
+        {!mobile ? (
+          <button className={`btn primary analyse-btn ${busy ? "busy" : ""}`} data-tour="analyse" onClick={analyse} disabled={busy || !!chartState.error} title="Analyse this chart (A)">
+            {busy ? <span className="spinner" /> : <Icon name="zap" size={17} />}
+            <span>{busy ? "Analysing" : "Analyse"}</span>
+          </button>
+        ) : null}
         {narrow && !mobile ? (
           <button className="icon-btn" onClick={() => setPanelOpen(!panelOpen)} title="Panel"><Icon name="menu" /></button>
         ) : null}
@@ -866,7 +1046,29 @@ export default function Terminal() {
         </nav>
       ) : null}
 
-      <CrossMenu at={crossMenu} onClose={() => setCrossMenu(null)} onLine={lineAt} onAlert={alertAt} />
+      <CrossMenu at={crossMenu} onClose={() => setCrossMenu(null)} onLine={(at) => lineAt(at, "hline")} onRay={(at) => lineAt(at, "hray")}
+        onAlert={alertAt} onAlertForm={alertForm} onCopy={copyPrice} symbolLabel={display} last={meta ? meta.price : null} />
+      <ChartTypeSheet open={sheet === "types"} onClose={() => setSheet(null)} value={settings.candles.style} onPick={pickType}
+        favorites={settings.chartFavorites || []} onFavorites={(f) => updateSettings({ chartFavorites: f })}
+        onUnavailable={(t) => toast(t.needs, "info", 6000)} tipSeen={!!settings.chartTypeTipSeen} onTipSeen={() => updateSettings({ chartTypeTipSeen: true })} />
+      <AnalysisHub open={sheet === "hub"} onClose={() => setSheet(null)} go={setSheet} symbol={symbol} tf={tf}
+        act={{ newLayout, saveLayout, publish, note: (m) => toast(m, "info", 6000),
+          alerts: () => { setSheet(null); requestAlert({ list: true }); },
+          replay: () => { setSheet(null); openTab("replay"); } }} />
+      <LayoutPanel open={sheet === "layout"} onClose={() => setSheet(null)} onBack={back} settings={settings} update={updateSettings}
+        panelHidden={panelHidden} setPanelHidden={setPanelHidden} narrow={narrow} />
+      <LayoutsPanel open={sheet === "layouts"} onClose={() => setSheet(null)} onBack={back} layouts={layouts} current={settings.currentLayout}
+        onOpen={openLayout} onDelete={deleteLayout} onSaveAs={saveLayoutAs} onRename={renameLayout} />
+      <IndicatorsPanel open={sheet === "indicators" || sheet === "templates"} templatesOnly={sheet === "templates"} onClose={() => setSheet(null)} onBack={back}
+        settings={settings} update={updateSettings} templates={templates} onSaveTemplate={saveTemplate} onApplyTemplate={applyTemplate} onDeleteTemplate={deleteTemplate} />
+      <ComparePanel open={sheet === "compare"} onClose={() => setSheet(null)} onBack={back} compare={compare} onAdd={addCompare} onRemove={removeCompare} symbol={display} />
+      <ObjectTreePanel open={sheet === "objects"} onClose={() => setSheet(null)} onBack={back} drawings={drawList} decimals={dec}
+        onSelect={objectAct.select} onToggle={objectAct.toggle} onLock={objectAct.lock} onDelete={objectAct.del}
+        hasAnalysis={!!res} analysisOn={analysisOn} onAnalysis={toggleAnalysis} />
+      <SymbolDetailsPanel open={sheet === "details"} onClose={() => setSheet(null)} onBack={back} meta={meta} symbol={symbol} tf={tf} />
+      <TechnicalsPanel open={sheet === "technicals"} onClose={() => setSheet(null)} onBack={back} candles={eng.current ? eng.current.raw : []}
+        symbol={display} tf={tf} decimals={dec} />
+      <BrokerPanel open={sheet === "broker"} onClose={() => setSheet(null)} onBack={back} meta={meta} symbol={display} plan={res && res.plan} decimals={dec} toast={toast} />
       <ReviewModal open={review.open} onClose={() => setReview({ open: false, prefill: null })} symbol={symbol} tf={tf} prefill={review.prefill}
         price={meta && meta.price} decimals={dec} settings={settings} onLimit={showLimit} onShowOnChart={placeTrade} />
       <Paywall open={!!paywall} onClose={() => setPaywall(null)} info={paywall} />

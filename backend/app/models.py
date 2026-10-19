@@ -60,6 +60,8 @@ class User(Base):
     terms_accepted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)   # when they ticked the Terms
     terms_version: Mapped[str | None] = mapped_column(String(20), nullable=True)           # which Terms they accepted
     learn_consent: Mapped[bool] = mapped_column(Boolean, default=False)                   # may we learn from their charts?
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)       # set by an admin (is_active off)
+    suspended_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     org = relationship("Organization", foreign_keys=[org_id], lazy="joined")
 
@@ -223,6 +225,14 @@ class AnalysisLog(Base):
     exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     dup_of: Mapped[int | None] = mapped_column(Integer, nullable=True)
     checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # how the trade travelled (services/excursion.py), in multiples of the planned risk: the worst it went against the
+    # entry (mae_r) and the best it went for it (mfe_r) while open; for a stopped trade, whether price went on to the
+    # target afterwards (swept: the stop was taken, then the move happened) and how far past the stop it went first
+    mae_r: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mfe_r: Mapped[float | None] = mapped_column(Float, nullable=True)
+    swept: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    sweep_depth_r: Mapped[float | None] = mapped_column(Float, nullable=True)
+    post_final: Mapped[bool] = mapped_column(Boolean, default=False)          # the after-stop watch is finished
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 

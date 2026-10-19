@@ -112,7 +112,12 @@ export default function AlertsBell({ symbol, tf, price, decimals = 2, onLimit })
     const h = (e) => {
       const d = e.detail || {};
       if (d.plan) createPlanAlerts(d);
-      else {
+      else if (d.list) {
+        // the analysis hub's Alerts: open the list of alerts set
+        setOpen(true);
+        setTab("alerts");
+        setForm(null);
+      } else {
         setOpen(true);
         setTab("alerts");
         setForm({ symbol: d.symbol || symbol, tf: d.tf || tf, price: String(d.price ?? price ?? ""), op: d.op || "auto", note: d.note || "", email: false, repeat: false });

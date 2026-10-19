@@ -313,5 +313,6 @@ def summarize(res, report_chars=5000):
         probabilities=res.get("probabilities"), session=res.get("session"), model=res.get("model"),
         news=dict(risk=nw.get("risk"), note=nw.get("note"), events=(nw.get("events") or [])[:5],
                   headlines=[h.get("title") for h in (nw.get("headlines") or [])[:5]]),
-        user_drawings=res.get("user_drawings"),
+        user_drawings=res.get("user_drawings"), learning=res.get("learning"),
+        asset_class=(res.get("meta") or {}).get("asset_class"),
         report=(res.get("report") or "")[:report_chars])

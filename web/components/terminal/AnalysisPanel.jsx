@@ -304,6 +304,15 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
           {res.tendencies.map((t, i) => <div key={i} className="hint" style={{ lineHeight: 1.5, marginTop: i ? 8 : 0 }}>{t}</div>)}
         </div>
       ) : null}
+      {res.learning && res.learning.message ? (
+        <div className="card" style={{ padding: 14, marginTop: 10 }}>
+          <b style={{ fontSize: "0.92rem" }}>What the analyst&apos;s record says</b>
+          <div className="hint" style={{ margin: "4px 0 8px" }}>
+            From {res.learning.settled} settled calls, live and replayed, checked on the candles that came after.
+          </div>
+          <div className="hint" style={{ lineHeight: 1.5 }}>{res.learning.message}</div>
+        </div>
+      ) : null}
       {res.plan && res.plan.checklist ? (
         <details className="fold" open>
           <summary>Why this grade <span className="faint num">{Number(res.plan.score).toFixed(1)}/10</span></summary>

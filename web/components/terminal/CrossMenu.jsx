@@ -1,10 +1,12 @@
 "use client";
-// The crosshair menu, opened when a finger lifts on the price tag after holding the crosshair, by clicking that tag, or
-// by right-clicking the chart. It
-// offers a horizontal line or a price alert at the price under the crosshair, like TradingView.
+// The crosshair's + menu, like TradingView's: tap the + on the crosshair's price tag (or right-click the chart) for an
+// alert or a horizontal line at that price. On a phone it rises from the bottom; on a larger screen it opens beside
+// the pointer.
 import { useEffect } from "react";
+import Icon from "@/components/Icons";
+import Sheet from "./Sheet";
 
-export default function CrossMenu({ at, onClose, onLine, onAlert }) {
+export default function CrossMenu({ at, onClose, onLine, onRay, onAlert, onAlertForm, onCopy, symbolLabel, last }) {
   useEffect(() => {
     if (!at) return undefined;
     const k = (e) => e.key === "Escape" && onClose();
@@ -12,21 +14,35 @@ export default function CrossMenu({ at, onClose, onLine, onAlert }) {
     return () => window.removeEventListener("keydown", k);
   }, [at, onClose]);
   if (!at) return null;
-  const p = Number(at.price).toFixed(at.decimals ?? 2);
+  const p = Number(at.price).toLocaleString("en-US", { minimumFractionDigits: at.decimals ?? 2, maximumFractionDigits: at.decimals ?? 2 });
+  const op = last && at.price < last ? "below" : "above";
+  const items = [
+    ["bell", `Add alert on ${symbolLabel} at ${p}`, () => onAlert(at, op), op === "above" ? "When price rises to it" : "When price falls to it"],
+    ["hline", `Draw horizontal line at ${p}`, () => onLine(at)],
+    ["hray", `Draw horizontal ray at ${p}`, () => onRay(at)],
+    ["settings", "Alert with options…", () => onAlertForm(at, op), "A note, repeats and email"],
+    ["copy", `Copy price ${p}`, () => onCopy(at)],
+  ];
+  const list = (
+    <div className="cross-list" role="menu" aria-label={`At ${p}`}>
+      {items.map(([ic, label, fn, sub]) => (
+        <button key={label} role="menuitem" onClick={fn}>
+          <Icon name={ic} size={18} />
+          <span className="grow">{label}{sub ? <small>{sub}</small> : null}</span>
+        </button>
+      ))}
+    </div>
+  );
+  const phone = typeof window !== "undefined" && window.innerWidth <= 760;
+  if (phone) return <Sheet open onClose={onClose} title={p}>{list}</Sheet>;
   const vw = typeof window !== "undefined" ? window.innerWidth : 800;
   const vh = typeof window !== "undefined" ? window.innerHeight : 800;
-  const left = Math.max(8, Math.min(at.x, vw - 252));
-  const top = Math.max(8, Math.min(at.y, vh - 190));
-  const item = { display: "block", width: "100%", textAlign: "left", padding: "10px 12px", background: "none", border: 0, color: "inherit", font: "inherit", cursor: "pointer", borderRadius: 8 };
+  const left = Math.max(8, Math.min(at.x - 300, vw - 320));
+  const top = Math.max(8, Math.min(at.y, vh - 260));
   return (
     <div onPointerDown={onClose} style={{ position: "fixed", inset: 0, zIndex: 60 }}>
-      <div role="menu" aria-label={`At ${p}`} onPointerDown={(e) => e.stopPropagation()}
-        className="glass" style={{ position: "fixed", left, top, width: 244, padding: 6, borderRadius: 12, boxShadow: "0 10px 30px rgba(0,0,0,0.4)" }}>
-        <div className="muted" style={{ padding: "6px 12px 8px", fontSize: "0.82rem" }}>At {p}</div>
-        <button role="menuitem" style={item} onClick={() => onLine(at)}>Horizontal line here</button>
-        <button role="menuitem" style={item} onClick={() => onAlert(at, "above")}>Alert when price rises above</button>
-        <button role="menuitem" style={item} onClick={() => onAlert(at, "below")}>Alert when price falls below</button>
-        <button role="menuitem" style={{ ...item, color: "var(--muted, #9aa3b5)" }} onClick={onClose}>Cancel</button>
+      <div onPointerDown={(e) => e.stopPropagation()} className="glass cross-pop" style={{ left, top }}>
+        {list}
       </div>
     </div>
   );

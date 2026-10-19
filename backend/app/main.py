@@ -15,7 +15,8 @@ from .config import settings
 from .db import SessionLocal, init_db
 from .models import Payment, User, utcnow
 from .plans import get_setting
-from .security import hash_password, verify_password
+from .deps import client_ip
+from .security import api_limiter, hash_password, verify_password
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("streix")
@@ -57,8 +58,9 @@ def housekeeping():
 
 
 def _background():
-    from .services import catalog
+    from .services import catalog, selflearn
     catalog.load_disk()
+    i = 0
     while True:
         try:
             catalog.refresh()
@@ -68,6 +70,13 @@ def _background():
             housekeeping()
         except Exception:
             log.exception("housekeeping failed")
+        if i % 12 == 1:                      # every six hours: learn again from the calls settled since
+            try:
+                with SessionLocal() as db:
+                    selflearn.retrain(db)
+            except Exception:
+                log.exception("self-learning retrain failed")
+        i += 1
         time.sleep(1800)
 
 
@@ -109,19 +118,43 @@ async def lifespan(app):
     yield
 
 
-app = FastAPI(title="StreixAnalyst API", version=VERSION, lifespan=lifespan, docs_url="/api/docs",
-              openapi_url="/api/openapi.json", redoc_url=None)
+app = FastAPI(title="StreixAnalyst API", version=VERSION, lifespan=lifespan,
+              docs_url="/api/docs" if settings.enable_docs else None,
+              openapi_url="/api/openapi.json" if settings.enable_docs else None, redoc_url=None)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins, allow_credentials=True,
                    allow_methods=["*"], allow_headers=["*"])
 
 
+BIG_UPLOADS = {"/api/admin/brain/upload": 400}      # MB allowed on routes that take large files
+
+
 @app.middleware("http")
-async def security_headers(request: Request, call_next):
+async def guard(request: Request, call_next):
+    """Abuse protection on every request: a per-address request budget, a cap on request size, and strict headers.
+    This stops a single machine flooding the API. A large distributed attack has to be stopped before it reaches the
+    server, at a proxy such as Cloudflare (docs/SECURITY.md)."""
+    path = request.url.path
+    if path.startswith("/api/") and path != "/api/health":
+        if not api_limiter.hit(client_ip(request)):
+            return JSONResponse({"detail": "Too many requests from your network. Wait a minute and try again."},
+                                status_code=429, headers={"Retry-After": "60"})
+        size = request.headers.get("content-length")
+        cap = BIG_UPLOADS.get(path, settings.max_body_mb) * 1024 * 1024
+        if size and (not size.isdigit() or int(size) > cap):
+            return JSONResponse({"detail": "That request is too large."}, status_code=413)
     resp = await call_next(request)
-    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
-    resp.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
-    resp.headers.setdefault("X-Frame-Options", "DENY")
+    h = resp.headers
+    h.setdefault("X-Content-Type-Options", "nosniff")
+    h.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    h.setdefault("X-Frame-Options", "DENY")
+    h.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+    h.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    if "json" in (h.get("content-type") or ""):
+        h.setdefault("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+        h.setdefault("Cache-Control", "no-store")
+    if settings.production:
+        h.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     return resp
 
 

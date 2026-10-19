@@ -8,7 +8,7 @@ from ..db import get_db
 from ..deps import current_user, verified_user
 from ..models import AnalysisLog, User, iso, jdump, jload
 from ..plans import consume, features_of, refund, require_feature, tier_of
-from ..services import engine, psychology
+from ..services import engine, psychology, selflearn
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
@@ -55,6 +55,14 @@ def _clean_drawings(items):
     return out
 
 
+def learning_note(res):
+    """What the analyst's own record says about calls like this one (services/selflearn.py), or None."""
+    try:
+        return selflearn.note_for(res)
+    except Exception:
+        return None
+
+
 @router.post("/run")
 def run(body: AnalyzeIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     require_feature(user, "analysis")
@@ -71,6 +79,7 @@ def run(body: AnalyzeIn, user: User = Depends(verified_user), db: Session = Depe
         raise HTTPException(500, f"The analysis failed unexpectedly ({type(e).__name__}). Please try again.")
     if "pro_report" not in features_of(tier_of(user)):          # free plan: the report in the user's own mode only
         res["report_pro" if mode == "beginner" else "report_beginner"] = None
+    res["learning"] = learning_note(res)
     pl = res.get("plan") or {}
     vd = res.get("verdict") or {}
     j = min(1, len(pl.get("tps") or [0]) - 1)

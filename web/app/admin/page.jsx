@@ -157,6 +157,19 @@ function Users({ toast, me }) {
   const upd = async (u, body, msg) => {
     try { await patch(`/admin/users/${u.id}`, body); toast(msg, "success"); load(); } catch (e) { toast(e.message, "error"); }
   };
+  const suspend = async (u) => {
+    const reason = window.prompt(`Suspend ${u.email}? They are signed out at once and can't sign in until you unsuspend them.\n\nReason (shown to them when they try to sign in):`, "");
+    if (reason === null) return;
+    try { await post(`/admin/users/${u.id}/suspend`, { reason: reason.trim() || null }); toast("Account suspended", "success"); load(); } catch (e) { toast(e.message, "error"); }
+  };
+  const unsuspend = async (u) => {
+    try { await post(`/admin/users/${u.id}/unsuspend`); toast("Account active again", "success"); load(); } catch (e) { toast(e.message, "error"); }
+  };
+  const remove = async (u) => {
+    const typed = window.prompt(`Delete ${u.email} for good?\n\nTheir account, settings, drawings, alerts, chats, saved analyses and payment records are erased. This can't be undone.\nThe analyses the app gave them stay in the learning record, without their name.\n\nType the email to confirm:`, "");
+    if (typed === null) return;
+    try { await api(`/admin/users/${u.id}`, { method: "DELETE", body: { confirm: typed } }); toast(`${u.email} deleted`, "success"); load(); } catch (e) { toast(e.message, "error"); }
+  };
   const resetPw = async (u) => {
     if (!window.confirm(`Reset the password for ${u.email}?`)) return;
     try {
@@ -175,8 +188,9 @@ function Users({ toast, me }) {
               <tbody>
                 {d.users.map((u) => (
                   <tr key={u.id}>
-                    <td><b>{u.name}</b> {u.role === "admin" ? <span className="badge brand">admin</span> : null} {!u.is_active ? <span className="badge down">disabled</span> : null}
-                      <div className="faint">{u.email}{u.phone ? ` · ${u.phone}` : ""} · {u.experience || "—"}</div></td>
+                    <td><b>{u.name}</b> {u.role === "admin" ? <span className="badge brand">admin</span> : null} {!u.is_active ? <span className="badge down" title={u.suspended_reason || ""}>suspended</span> : null}
+                      <div className="faint">{u.email}{u.phone ? ` · ${u.phone}` : ""} · {u.experience || "—"}</div>
+                      {!u.is_active ? <div className="hint">Suspended {u.suspended_at ? fmtDateTime(u.suspended_at) : ""}{u.suspended_reason ? `: ${u.suspended_reason}` : ""}</div> : null}</td>
                     <td><span className="badge" style={{ textTransform: "capitalize" }}>{u.tier}</span>
                       <div className="faint">{u.tier === "pro" ? `until ${fmtDateTime(u.plan_expires_at)}` : u.tier === "trial" ? `trial ends ${fmtDateTime(u.trial_ends_at)}` : u.org ? u.org : ""}</div></td>
                     <td>{fmtDateTime(u.created_at)}</td>
@@ -188,7 +202,9 @@ function Users({ toast, me }) {
                         <button className="btn sm ghost" onClick={() => resetPw(u)}>Reset password</button>
                         {u.id !== me.id ? (
                           <>
-                            <button className="btn sm ghost" onClick={() => upd(u, { is_active: !u.is_active }, u.is_active ? "User disabled" : "User enabled")}>{u.is_active ? "Disable" : "Enable"}</button>
+                            {u.is_active ? <button className="btn sm ghost" onClick={() => suspend(u)}>Suspend</button>
+                              : <button className="btn sm ghost" onClick={() => unsuspend(u)}>Unsuspend</button>}
+                            <button className="btn sm danger" onClick={() => remove(u)}><Icon name="trash" size={14} /> Delete</button>
                             <button className="btn sm ghost" onClick={() => window.confirm(`Change ${u.email}'s role?`) && upd(u, { role: u.role === "admin" ? "user" : "admin" }, "Role changed")}>{u.role === "admin" ? "Remove admin" : "Make admin"}</button>
                           </>
                         ) : null}
@@ -342,14 +358,45 @@ function System({ toast }) {
   );
 }
 
+function SelfLearning({ m, onRetrain, busy }) {
+  const sw = (m && m.sweeps && m.sweeps.overall) || null;
+  return (
+    <div className="card stack" style={{ padding: 16, gap: 10 }}>
+      <div className="row wrap" style={{ justifyContent: "space-between" }}>
+        <div><b>What the analyst learned from its own calls</b>
+          <div className="faint" style={{ fontSize: "0.82rem" }}>Relearned every six hours from settled calls (live and replays). Shown beside each new analysis.</div></div>
+        <button className="btn sm" onClick={onRetrain} disabled={busy}>{busy ? <Spinner /> : <Icon name="refresh" size={15} />} Learn now</button>
+      </div>
+      {!m ? <div className="hint">Not learned yet. Press Learn now, or wait for the next run.</div> : (
+        <>
+          <div className="hint">{m.settled} settled calls · win rate {m.win_rate !== null && m.win_rate !== undefined ? `${Math.round(m.win_rate * 100)}%` : "—"} · {m.reason}</div>
+          {m.by_grade && m.by_grade.length ? (
+            <div className="row wrap" style={{ gap: 6 }}>{m.by_grade.map((g) => <span key={g.grade} className="badge">{g.grade}: {Math.round(g.win_rate * 100)}% of {g.calls}</span>)}</div>
+          ) : null}
+          {sw && sw.stopped ? (
+            <div className="hint">Stop sweeps: {sw.swept} of {sw.stopped} stopped calls ({Math.round((sw.rate || 0) * 100)}%) went on to the target after the stop.
+              {sw.depth_p75 !== undefined ? ` Three in four sweeps ran no more than ${sw.depth_p75}R past the stop.` : ""}</div>
+          ) : <div className="hint">No stopped calls have finished their after-stop watch yet.</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
 function Learning() {
+  const { toast } = useAuth();
   const [d, setD] = useState(null);
+  const [busy, setBusy] = useState(false);
   const [minScore, setMinScore] = useState(70);
   const load = useCallback(() => get("/admin/learning").then(setD).catch(() => setD({ error: true })), []);
   useEffect(() => { load(); }, [load]);
   if (!d) return <Spinner />;
   if (d.error) return <div className="card" style={{ padding: 16 }}>Couldn't load the learning summary.</div>;
   const by = d.calls.by_outcome || {};
+  const retrain = async () => {
+    setBusy(true);
+    try { await post("/admin/learning/retrain"); toast("Learned again from every settled call.", "success"); load(); } catch (e) { toast(e.message, "error"); } finally { setBusy(false); }
+  };
   return (
     <div className="stack">
       <div className="card" style={{ padding: 16 }}>
@@ -366,11 +413,20 @@ function Learning() {
           <div className="faint" style={{ fontSize: "0.76rem" }}>{by.tp || 0} targets · {by.sl || 0} stops · {by.time || 0} time exits</div></div>
         <div className="card stat"><div className="k">Being tracked</div><div className="v">{(by.open || 0) + (by.pending || 0)}</div>
           <div className="faint" style={{ fontSize: "0.76rem" }}>{by.open || 0} running · {by.pending || 0} waiting to fill</div></div>
+        <div className="card stat"><div className="k">Stops swept</div><div className="v">{d.calls.swept || 0}</div>
+          <div className="faint" style={{ fontSize: "0.76rem" }}>of {d.calls.stopped_watched || 0} stopped calls watched to the end</div></div>
+        <div className="card stat"><div className="k">Journal</div><div className="v">{d.journal ? d.journal.lines : 0}</div>
+          <div className="faint" style={{ fontSize: "0.76rem" }}>settled calls written to the training file</div></div>
         <div className="card stat"><div className="k">Practice analyses</div><div className="v">{d.practice.total}</div>
           <div className="faint" style={{ fontSize: "0.76rem" }}>{d.practice.accurate} scored {d.practice.min_score}+</div></div>
       </div>
+      <SelfLearning m={d.selflearn} onRetrain={retrain} busy={busy} />
       <div className="card stack" style={{ padding: 16, gap: 12 }}>
         <div className="row wrap" style={{ justifyContent: "space-between" }}>
+          <div><b>The journal</b><div className="faint" style={{ fontSize: "0.82rem" }}>Every settled call as it happened: levels, analysis, result, worst and best excursion, and whether a stop was swept. JSON Lines, for retraining.</div></div>
+          <a className="btn" href="/api/admin/learning/journal" download><Icon name="download" size={16} /> Download journal</a>
+        </div>
+        <div className="row wrap" style={{ justifyContent: "space-between", borderTop: "1px solid var(--line)", paddingTop: 12 }}>
           <div><b>Resolved analyst calls</b><div className="faint" style={{ fontSize: "0.82rem" }}>Each call's full analysis snapshot + its measured result (duplicates removed). JSON Lines.</div></div>
           <a className="btn primary" href="/api/admin/learning/export?dataset=calls" download onClick={() => setTimeout(load, 1500)}><Icon name="download" size={16} /> Download calls</a>
         </div>

@@ -235,7 +235,27 @@ class FakeOPay:
 
 
 # ───────────── Anthropic (streaming) ─────────────
+def ai_handler(request):
+    """Every cloud model StreixAI can call: Anthropic, or Google Gemini."""
+    if request.url.host == "generativelanguage.googleapis.com":
+        return gemini_handler(request)
+    return anthropic_handler(request)
+
+
+def gemini_handler(request):
+    body = json.loads(request.content)
+    assert request.headers["x-goog-api-key"] and request.url.params.get("alt") == "sse"
+    assert ":streamGenerateContent" in request.url.path and "StreixAI" in body["systemInstruction"]["parts"][0]["text"]
+    assert body["contents"][-1]["role"] == "user" and body["generationConfig"]["maxOutputTokens"] > 0
+    text = "A liquidity sweep: price runs the stops past a level, then turns."
+    chunks = [dict(candidates=[dict(content=dict(role="model", parts=[dict(text=w + " ")]))]) for w in text.split(" ")]
+    sse = "".join(f"data: {json.dumps(c)}\r\n\r\n" for c in chunks)
+    return httpx.Response(200, content=sse.encode(), headers={"content-type": "text/event-stream"})
+
+
 def anthropic_handler(request):
+    if request.headers.get("x-api-key") == "fail":
+        return httpx.Response(529, json=dict(type="error", error=dict(type="overloaded_error", message="Overloaded")))
     body = json.loads(request.content)
     assert request.headers["x-api-key"] and request.headers["anthropic-version"] == "2023-06-01"
     assert body["stream"] is True and body["messages"][0]["role"] == "user" and "StreixAI" in body["system"]
