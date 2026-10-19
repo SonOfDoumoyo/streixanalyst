@@ -988,6 +988,76 @@ def t_email_verification(_c):
         mailer.send, cfg.smtp_host = real_send, real_host
 
 
+def t_psychology(_c):
+    """The notes about a person's calls come from their own earlier calls: chasing the entry, calling again straight
+    after a loss, and the feeling they named. Nothing is said until there are enough calls to say it."""
+    from datetime import datetime
+    from types import SimpleNamespace
+    from app.services import psychology as ps
+
+    def row(i, hh, mm, side, entry, status=None, r=None, emotion="calm", aentry=100.0, asl=98.0):
+        res = dict(final=True, user=dict(status=status, r=r)) if status else {}
+        d = dict(side=side, entry=entry, sl=entry - 2 if side == "long" else entry + 2, tp=entry + 4 if side == "long" else entry - 4,
+                 emotion=emotion, note=None, decided_at=f"2026-10-01T{hh:02d}:{mm:02d}:00Z")
+        return SimpleNamespace(id=i, created_at=datetime(2026, 10, 1, 9), symbol="BTCUSDT", tf="1h", side="long",
+                               entry=aentry, sl=asl, tp=aentry + 4, grade="B", outcome=None, outcome_r=None,
+                               plan_type="limit", summary=json.dumps(dict(decision=d, result=res)))
+    rows = [row(1, 8, 0, "long", 100.0, "tp", 2.0),
+            row(2, 9, 0, "long", 101.0, "sl", -1.0, emotion="fomo"),       # chased: filled 0.5R past the analyst
+            row(3, 9, 10, "long", 100.4, "sl", -1.0, emotion="revenge"),   # straight after a loss, 10 minutes later
+            row(4, 11, 0, "long", 100.0, "tp", 2.0, emotion="calm"),
+            row(5, 12, 0, "long", 100.0, None, None, emotion="unsure")]
+    ds = ps.features(ps.decision_rows(rows))
+    check([d["id"] for d in ds] == [1, 2, 3, 4, 5], "decisions come back in the order they were made")
+    check(ds[1]["chased"] is True and ds[1]["slip_r"] == 0.5 and ds[0]["chased"] is False, ds[1])
+    check(ds[2]["quick_after_loss"] is True and ds[2]["streak_before"] == 1, ds[2])
+    check(ds[0]["quick_after_loss"] is False and ds[0]["streak_before"] == 0, "the first call has no history")
+    check(ds[3]["streak_before"] == 2 and ds[4]["streak_before"] == 0 and ds[4]["settled"] is False,
+          "two losses in a row are counted, the win after them resets the streak, and an unsettled call adds nothing")
+    check(ps.tips(ds) == [], "no tendencies until there are enough settled calls")
+    many = []
+    for i in range(1, 13):
+        many.append(row(100 + i, 8, i, "long", 101.0 if i % 2 else 100.0, "sl" if i % 3 == 0 else "tp",
+                        -1.0 if i % 3 == 0 else 2.0, emotion="fomo" if i % 4 == 0 else "calm"))
+    tips_now = ps.tips(ps.features(ps.decision_rows(many)))
+    check(any("chased the entry" in t for t in tips_now), tips_now)
+    cur = ds[2]
+    text = " | ".join(ps.coach(cur, ds[:2]))
+    check("past the analyst's entry" not in text and "straight after a loss" in text, text)
+    check(ps.coach(ds[1], ds[:1]) and "past the analyst's entry" in ps.coach(ds[1], ds[:1])[0], ps.coach(ds[1], ds[:1]))
+
+
+def t_replay_decisions(c):
+    """A call is written down the moment it is made, with the feeling; it cannot change afterwards; the coach answers
+    from the person's history; the export carries the call and the feeling, and never the note text."""
+    import pandas as pd
+    from app.models import AnalysisLog, utcnow
+    signup(c, "decider@example.com")
+    at_iso = (utcnow() - timedelta(days=3)).replace(minute=0, second=0, microsecond=0).isoformat() + "Z"
+    cs = c.get("/api/market/candles", params=dict(symbol="BTCUSDT", tf="1h", bars=200, at=at_iso)).json()
+    rep = c.post("/api/replay/analyze", json=dict(symbol="BTCUSDT", tf="1h", at=at_iso), headers=H).json()
+    rid = rep["replay_id"]
+    px = cs["candles"][-1][4]
+    call = dict(replay_id=rid, side="long", entry=px, sl=px * 0.9, tp=px * 1.2)
+    check(c.post("/api/replay/reveal", json=dict(call, emotion="panic"), headers=H).status_code == 422, "an unknown feeling is refused")
+    r = c.post("/api/replay/reveal", json=dict(call, emotion="fomo", note="I can't miss this"), headers=H)
+    check(r.status_code == 200 and r.json()["decision"]["emotion"] == "fomo", r.text[:300])
+    check(c.post("/api/replay/reveal", json=dict(call, entry=px * 0.99, emotion="calm"), headers=H).status_code == 409,
+          "a call cannot be changed once it is made")
+    r = c.post("/api/replay/reveal", json=dict(replay_id=rid), headers=H)
+    check(r.status_code == 200 and r.json()["decision"]["side"] == "long" and "coach" in r.json(), r.text[:300])
+    db = _db()
+    s = json.loads(db.get(AnalysisLog, rid).summary)
+    db.close()
+    check(s["decision"]["note"] == "I can't miss this" and s["decision"]["decided_at"], "the call is stored when it is made")
+    adm = client()
+    adm.post("/api/auth/login", json=dict(email="owner@streixcorp.com", password="Admin-Pass-2026!"), headers=H)
+    lines = [json.loads(x) for x in adm.get("/api/admin/learning/export?dataset=decisions").text.splitlines() if x]
+    mine = [x for x in lines if x["id"] == rid]
+    check(mine and mine[0]["emotion"] == "fomo" and mine[0]["has_note"] is True and "note" not in mine[0]
+          and mine[0]["side"] == "long" and mine[0]["entry"] == px, ("export", mine))
+
+
 def main():
     t0 = time.time()
     with client() as c:
@@ -1009,6 +1079,8 @@ def main():
         run("t_brain_version", t_brain_version, None)
         run("t_direction_view", t_direction_view, None)
         run("t_email_verification", t_email_verification, client())
+        run("t_psychology", t_psychology, None)
+        run("t_replay_decisions", t_replay_decisions, client())
         for t in (t_terms_and_site, t_stage2, t_practice, t_strategy, t_scalp_template, t_tracker_rules, t_track_record, t_alerts, t_push, t_replay,
                   t_learning_export):
             run(t.__name__, t, client())

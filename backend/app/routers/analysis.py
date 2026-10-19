@@ -8,7 +8,7 @@ from ..db import get_db
 from ..deps import current_user, verified_user
 from ..models import AnalysisLog, User, iso, jdump, jload
 from ..plans import consume, features_of, refund, require_feature, tier_of
-from ..services import engine
+from ..services import engine, psychology
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
 
@@ -84,6 +84,8 @@ def run(body: AnalyzeIn, user: User = Depends(verified_user), db: Session = Depe
     db.commit()
     res["analysis_id"] = log_row.id
     res["mode"] = mode
+    # the person's own tendencies from their replays (chasing, re-entering after a loss, feelings): empty until enough
+    res["tendencies"] = psychology.tips(psychology.features(psychology.decision_rows(psychology.replays_of(db, user.id, 300))))
     return res
 
 

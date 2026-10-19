@@ -79,6 +79,7 @@ export class ChartEngine {
     this.theme = { ...DEFAULT_THEME };
     this.opts = { ...DEFAULT_OPTS, indicators: { ...DEFAULT_OPTS.indicators } };
     this.spacing = 9;
+    this.minCandle = 2;            // narrowest candle in px (Settings > Chart); pinching in stops here
     this.right = 0;
     this.auto = true;
     this.pmin = 0;
@@ -113,7 +114,7 @@ export class ChartEngine {
     this._lastTap = 0;
     this._h = {
       down: (e) => this.onDown(e), move: (e) => this.onMove(e), up: (e) => this.onUp(e), leave: (e) => this.onLeave(e),
-      wheel: (e) => this.onWheel(e), key: (e) => this.onKey(e), dbl: (e) => this.onDbl(e), ctx: (e) => e.preventDefault(),
+      wheel: (e) => this.onWheel(e), key: (e) => this.onKey(e), dbl: (e) => this.onDbl(e), ctx: (e) => this.onCtx(e),
     };
     const c = canvas;
     c.addEventListener("pointerdown", this._h.down);
@@ -176,15 +177,24 @@ export class ChartEngine {
   }
 
   // ───────────── data ─────────────
-  setData(rows, { tfSec, decimals, label, keepView = false } = {}) {
+  setData(rows, { tfSec, decimals, label, keepView = false, keepWidth = false } = {}) {
     const keepT = keepView && this.d.length ? this.indexToTime(this.right) : null;
+    // keepWidth: a new set of candles (another symbol, timeframe or replay moment) keeps the candle width the person
+    // chose. The view still goes to the latest candle, but the zoom is never changed for them.
+    const width = keepWidth ? this.spacing : null;
     this.d = rows.map((r) => (Array.isArray(r) ? { t: r[0], o: r[1], h: r[2], l: r[3], c: r[4], v: r[5] || 0 } : r));
     if (tfSec) this.tfSec = tfSec;
     if (decimals !== undefined && decimals !== null) this.dec = decimals;
     if (label !== undefined) this.label = label;
     this._recompute();
     if (keepT !== null) this.right = this.timeToIndex(keepT);
-    else this.resetView();
+    else if (rows.length) {
+      this.resetView();
+      if (width !== null) {
+        this.spacing = clamp(width, this._minSp(), 80 * this.scale);
+        this._clampRight();
+      }
+    }
     this.dirty();
   }
 
@@ -269,6 +279,10 @@ export class ChartEngine {
     const prevStyle = this.opts.style;
     this.opts = { ...this.opts, ...opts, indicators: { ...this.opts.indicators, ...(opts.indicators || {}) } };
     if (this.opts.style !== prevStyle) this._recompute();
+    if (opts.minCandle !== undefined) {
+      this.minCandle = clamp(Number(opts.minCandle) || 2, 1, 10);
+      if (this.spacing < this._minSp()) this.spacing = this._minSp();
+    }
     this.dirty();
   }
 
@@ -449,6 +463,22 @@ export class ChartEngine {
     this.right = b;
     this.auto = true;
     this.dirty();
+  }
+
+  /** Bring the time span [tFrom, tTo] on screen by panning. The candle width the person chose stays as it is, and a
+   *  span that is already visible leaves the view alone. */
+  panTo(tFrom, tTo) {
+    if (!this.d.length || !this.plotW) return;
+    const a = this.timeToIndex(tFrom);
+    const b = this.timeToIndex(tTo);
+    const [i0, i1] = this.visRange();
+    if (a >= i0 && b <= i1) return;
+    const visible = i1 - i0;
+    // a span that fits is centred; a longer one starts at the left edge, so the setup and its levels are seen first
+    this.right = b - a <= visible ? (a + b) / 2 + visible / 2 : a + visible - 3;
+    this._clampRight();
+    this.dirty();
+    this.emit("view", this.viewState());
   }
 
   // ───────────── analysis overlay ─────────────
@@ -679,8 +709,9 @@ export class ChartEngine {
       return;
     }
     if (area === "paxis") {
-      this.drag = { mode: "yscale", y0: y, pmin: this.pmin, pmax: this.pmax };
-      this.auto = false;
+      // on the crosshair's price tag a tap (no drag) opens the crosshair menu; a drag scales the price axis
+      const tag = !!this.hover && this.hover.y !== undefined && Math.abs(y - this.hover.y) <= 18 * this.scale;
+      this.drag = { mode: "yscale", y0: y, pmin: this.pmin, pmax: this.pmax, tag, scaled: false };
       return;
     }
     if (area === "taxis") {
@@ -795,7 +826,7 @@ export class ChartEngine {
       const dx = Math.abs(a.x - b.x);
       const dy = Math.abs(a.y - b.y);
       const mid = (a.x + b.x) / 2;
-      if (dr.dx0 > 30) this.spacing = clamp(dr.sp0 * (dx / dr.dx0), 5 * this.scale, 80 * this.scale);
+      if (dr.dx0 > 30) this.spacing = clamp(dr.sp0 * (dx / dr.dx0), this._minSp(), 80 * this.scale);
       this.right = dr.i0 + (this.plotW - mid) / this.spacing;
       this._clampRight();
       if (dr.dy0 > 30 && dy > 0) {
@@ -859,6 +890,11 @@ export class ChartEngine {
         return;
       }
       if (dr.mode === "yscale") {
+        if (dr.tag && !dr.scaled && Math.abs(y - dr.y0) <= 4) return;     // still a tap on the crosshair tag
+        if (!dr.scaled) {
+          this.auto = false;
+          dr.scaled = true;
+        }
         const f = Math.exp((y - dr.y0) * 0.006);
         const a = this._f(dr.pmin);
         const b = this._f(dr.pmax);
@@ -870,7 +906,7 @@ export class ChartEngine {
         return;
       }
       if (dr.mode === "xscale") {
-        this.spacing = clamp(dr.sp0 * Math.exp((x - dr.x0) * 0.008), 5 * this.scale, 80 * this.scale);
+        this.spacing = clamp(dr.sp0 * Math.exp((x - dr.x0) * 0.008), this._minSp(), 80 * this.scale);
         this.right = dr.i0 + (this.plotW - dr.mid) / this.spacing;
         this._clampRight();
         this.dirty();
@@ -937,6 +973,10 @@ export class ChartEngine {
     }
     this.drag = null;
     if (!dr) return;
+    if (dr.mode === "yscale" && dr.tag && !dr.scaled) {
+      this._crossMenu(e.clientX, e.clientY, this.plotW, dr.y0);
+      return;
+    }
     if (dr.mode === "cross") {
       // A press that starts with the crosshair up and does not move is a tap, and it hides the crosshair. A long
       // press, or a hold that moves, leaves it up. A cancelled touch (pointercancel) never hides it.
@@ -967,6 +1007,22 @@ export class ChartEngine {
       }
       this.dirty();
     }
+  }
+
+  onCtx(e) {
+    e.preventDefault();
+    if (!this.d.length) return;
+    const { x, y } = this._pos(e);
+    if (this._area(x, y) !== "plot") return;
+    this.hover = { x, y, area: "plot" };
+    this._crossMenu(e.clientX, e.clientY, x, y);
+    this.dirty();
+  }
+
+  /** Tell the page where the crosshair is, so it can offer a line or an alert at that price and time. */
+  _crossMenu(clientX, clientY, x, y) {
+    const i = clamp(Math.round(this.index(Math.min(x, this.plotW))), 0, this.d.length - 1);
+    this.emit("crossMenu", { price: this.price(y), time: Math.round(this.indexToTime(i)), x: clientX, y: clientY, decimals: this.dec });
   }
 
   onLeave(e) {
@@ -1002,7 +1058,7 @@ export class ChartEngine {
     } else {
       const f = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015));
       const i0 = this.index(x);
-      this.spacing = clamp(this.spacing * f, 5 * this.scale, 80 * this.scale);
+      this.spacing = clamp(this.spacing * f, this._minSp(), 80 * this.scale);
       this.right = i0 + (this.plotW - x) / this.spacing;
       this._clampRight();
     }
@@ -1070,15 +1126,19 @@ export class ChartEngine {
     if (k === "+" || k === "=" || k === "-" || k === "_") {
       const f = k === "+" || k === "=" ? 1.15 : 1 / 1.15;
       const i0 = this.index(this.plotW);
-      this.spacing = clamp(this.spacing * f, 5 * this.scale, 80 * this.scale);
+      this.spacing = clamp(this.spacing * f, this._minSp(), 80 * this.scale);
       this.right = i0;
       this.dirty();
     }
   }
 
+  _minSp() {
+    return Math.max(1, this.minCandle || 2) * this.scale;
+  }
+
   zoom(f) {
     const i0 = this.index(this.plotW * 0.8);
-    this.spacing = clamp(this.spacing * f, 5 * this.scale, 80 * this.scale);
+    this.spacing = clamp(this.spacing * f, this._minSp(), 80 * this.scale);
     this.right = i0 + (this.plotW * 0.2) / this.spacing;
     this._clampRight();
     this.dirty();

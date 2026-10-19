@@ -106,7 +106,7 @@ function Sizing({ s, dec, isCrypto }) {
   );
 }
 
-function PlanCard({ p, dec, title, isCrypto, dim, onAlert }) {
+function PlanCard({ p, dec, title, isCrypto, dim, onAlert, onEdit }) {
   if (!p) return null;
   const j = Math.min(1, (p.tps || []).length - 1);
   return (
@@ -122,8 +122,13 @@ function PlanCard({ p, dec, title, isCrypto, dim, onAlert }) {
       <div className="row wrap" style={{ gap: 6, marginTop: 8, fontSize: "0.8rem" }}>
         {p.chase_limit ? <span className="badge num">Don't chase past {fmtPrice(p.chase_limit, dec)}</span> : null}
         {p.expiry ? <span className="badge">Valid {p.expiry} candles</span> : null}
+        {onEdit ? (
+          <button className="badge" onClick={() => onEdit(p)} style={{ cursor: "pointer", marginLeft: "auto" }} title="Put this plan on the chart. Drag the entry, stop or target, then grade your edits.">
+            <Icon name="pen" size={12} /> Edit on chart
+          </button>
+        ) : null}
         {onAlert ? (
-          <button className="badge brand" onClick={() => onAlert(p)} style={{ cursor: "pointer", marginLeft: "auto" }} title="Get notified when price reaches the entry, stop and target">
+          <button className="badge brand" onClick={() => onAlert(p)} style={{ cursor: "pointer" }} title="Get notified when price reaches the entry, stop and target">
             <Icon name="bell" size={12} /> Alert me
           </button>
         ) : null}
@@ -203,7 +208,7 @@ function Report({ res, can, onUpgrade }) {
   );
 }
 
-export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk, onClean, onUpgrade, hiddenLayers, toggleLayer, layers, detail, setDetail, showAlt, setShowAlt, stale, symbolLabel, tf, symbol }) {
+export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk, onClean, onUpgrade, hiddenLayers, toggleLayer, layers, detail, setDetail, showAlt, setShowAlt, stale, symbolLabel, tf, symbol, onEditPlan }) {
   const { settings, updateSettings, can, user } = useAuth();
   if (busy && !res) {
     return (
@@ -289,9 +294,16 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
         </div>
       ) : null}
       <div data-tour="plan">
-        <PlanCard p={res.plan} dec={dec} isCrypto={isCrypto} title={v.trade ? "The plan" : "Conditional plan"} onAlert={symbol ? (p) => planAlert(p) : null} />
+        <PlanCard p={res.plan} dec={dec} isCrypto={isCrypto} title={v.trade ? "The plan" : "Conditional plan"} onAlert={symbol ? (p) => planAlert(p) : null} onEdit={onEditPlan || null} />
       </div>
 
+      {res.tendencies && res.tendencies.length ? (
+        <div className="card" style={{ padding: 14, marginTop: 10 }}>
+          <b style={{ fontSize: "0.92rem" }}>Your tendencies</b>
+          <div className="hint" style={{ margin: "4px 0 8px" }}>From your own replays, so the plan fits how you trade.</div>
+          {res.tendencies.map((t, i) => <div key={i} className="hint" style={{ lineHeight: 1.5, marginTop: i ? 8 : 0 }}>{t}</div>)}
+        </div>
+      ) : null}
       {res.plan && res.plan.checklist ? (
         <details className="fold" open>
           <summary>Why this grade <span className="faint num">{Number(res.plan.score).toFixed(1)}/10</span></summary>
@@ -377,7 +389,7 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
       {res.alternative ? (
         <details className="fold">
           <summary>Alternative plan</summary>
-          <div><PlanCard p={res.alternative} dec={dec} isCrypto={isCrypto} title="If it goes the other way" dim onAlert={symbol ? (p) => planAlert(p) : null} /></div>
+          <div><PlanCard p={res.alternative} dec={dec} isCrypto={isCrypto} title="If it goes the other way" dim onAlert={symbol ? (p) => planAlert(p) : null} onEdit={onEditPlan || null} /></div>
         </details>
       ) : null}
 

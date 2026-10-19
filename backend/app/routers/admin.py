@@ -349,9 +349,30 @@ def learning_export(dataset: str = "calls", min_score: int = LEARN_MIN_SCORE, ad
     from fastapi.responses import StreamingResponse
 
     from ..models import PracticeAttempt
-    if dataset not in ("calls", "practice"):
-        raise HTTPException(422, "dataset must be 'calls' or 'practice'.")
-    if dataset == "calls":
+    if dataset not in ("calls", "practice", "decisions"):
+        raise HTTPException(422, "dataset must be 'calls', 'practice' or 'decisions'.")
+    if dataset == "decisions":
+        # what people did in their replays: the call they made, the feeling they named, and what it led to. Each
+        # row only uses earlier calls for its context. Free-text notes are left out; only whether one was written.
+        from ..services import psychology
+        consenting = select(User.id).where(User.learn_consent.is_(True))
+        rows = db.execute(select(AnalysisLog).where(AnalysisLog.kind == "replay", AnalysisLog.user_id.in_(consenting))
+                          .order_by(AnalysisLog.id)).scalars().all()
+        by_user = {}
+        for r in rows:
+            by_user.setdefault(r.user_id, []).append(r)
+        data = []
+        for uid, mine in by_user.items():
+            for d in psychology.features(psychology.decision_rows(mine)):
+                data.append(dict(id=d["id"], moment=d["moment"], symbol=d["symbol"], tf=d["tf"], decided_at=d["decided_at"],
+                                 emotion=d["emotion"], has_note=bool(d["note"]), side=d["side"], entry=d["entry"], sl=d["sl"],
+                                 tp=d["tp"], analyst_side=d["analyst_side"], analyst_entry=d["analyst_entry"],
+                                 analyst_sl=d["analyst_sl"], analyst_tp=d["analyst_tp"], grade=d["grade"],
+                                 analyst_outcome=d["analyst_outcome"], analyst_r=d["analyst_r"], status=d["status"],
+                                 r=d["r"], settled=d["settled"], slip_r=d["slip_r"], chased=d["chased"],
+                                 streak_before=d["streak_before"], quick_after_loss=d["quick_after_loss"]))
+        data.sort(key=lambda x: (x["moment"] or "", x["id"]))
+    elif dataset == "calls":
         # only accounts that ticked "learn from my charts" at sign-up (or later) are exported
         consenting = select(User.id).where(User.learn_consent.is_(True))
         rows = db.execute(select(AnalysisLog).where(AnalysisLog.kind.in_(("analysis", "replay")), AnalysisLog.dup_of.is_(None),
@@ -374,7 +395,8 @@ def learning_export(dataset: str = "calls", min_score: int = LEARN_MIN_SCORE, ad
             return dict(id=r.id, created_at=iso(r.created_at), symbol=r.symbol, tf=r.tf, price=r.price, bias=r.bias,
                         score=r.score, grade=r.grade, breakdown=jload(r.breakdown, None), drawings=jload(r.drawings, []),
                         trade=jload(r.trade, None))
-    data = [rec(r) for r in rows]          # read everything before the commit expires the rows
+    if dataset != "decisions":
+        data = [rec(r) for r in rows]      # read everything before the commit expires the rows
     billing.audit(db, "learning_export", dataset, dict(rows=len(data), min_score=min_score), admin.id)
     db.commit()
     stamp = utcnow().strftime("%Y%m%d-%H%M")

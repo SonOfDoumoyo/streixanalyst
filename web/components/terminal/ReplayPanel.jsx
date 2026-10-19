@@ -8,6 +8,9 @@ import PlanLadder from "@/components/terminal/PlanLadder";
 
 const AHEAD = 200;                       // candles of "what happened next" the chart shows after a reveal
 const NO_CALL = { side: "", entry: "", sl: "", tp: "" };
+// how the person felt making the call. Named before the outcome is known, and kept with the call for the model.
+const FEELINGS = [["calm", "Calm"], ["confident", "Confident"], ["fomo", "FOMO"], ["fear", "Fear"],
+  ["revenge", "Revenge"], ["bored", "Bored"], ["unsure", "Unsure"]];
 const WORDS = {
   tp: "Target hit",
   sl: "Stop hit",
@@ -68,6 +71,8 @@ export default function ReplayPanel({ symbol, tf, replay, setReplay, onAnalysis 
   const [when, setWhen] = useState(() => localInput(new Date(Date.now() - 24 * 60 * 60 * 1000)));
   const [analysis, setAnalysis] = useState(null);
   const [call, setCall] = useState(NO_CALL);
+  const [feel, setFeel] = useState("");
+  const [note, setNote] = useState("");
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -76,6 +81,8 @@ export default function ReplayPanel({ symbol, tf, replay, setReplay, onAnalysis 
   useEffect(() => {
     setAnalysis(null);
     setCall(NO_CALL);
+    setFeel("");
+    setNote("");
     setResult(null);
     setError(null);
     if (onAnalysis) onAnalysis(null);
@@ -85,6 +92,7 @@ export default function ReplayPanel({ symbol, tf, replay, setReplay, onAnalysis 
   const plan = analysis ? analysis.plan : null;
   const verdict = analysis ? analysis.verdict || {} : {};
   const locked = !!(result && result.final);
+  const decided = !!(result && result.decision);      // the call is written down: it cannot change now
   const canReveal = !!analysis && !locked && (!!plan || !!call.side);
 
   const show = () => {
@@ -115,13 +123,18 @@ export default function ReplayPanel({ symbol, tf, replay, setReplay, onAnalysis 
       const sl = Number(call.sl);
       const tp = Number(call.tp);
       if (!(entry > 0 && sl > 0 && tp > 0)) { setError("Fill in entry, stop and target, or leave the call empty."); return; }
-      mine = { side: call.side, entry, sl, tp };
+      mine = { side: call.side, entry, sl, tp, emotion: feel || null, note: note.trim() || null };
     }
     setBusy(true);
     setError(null);
     try {
       const d = await post("/replay/reveal", { replay_id: analysis.replay_id, ...mine });
       setResult(d);
+      if (d.decision) {
+        setCall({ side: d.decision.side, entry: String(d.decision.entry), sl: String(d.decision.sl), tp: String(d.decision.tp) });
+        setFeel(d.decision.emotion || "");
+        setNote(d.decision.note || "");
+      }
       setReplay({ at, ahead: AHEAD });
     } catch (e) {
       setError(e.message || "Couldn't reveal this replay.");
@@ -164,8 +177,8 @@ export default function ReplayPanel({ symbol, tf, replay, setReplay, onAnalysis 
 
               <div className="stack" style={{ gap: 8 }}>
                 <div className="label">Your call (optional)</div>
-                <div className="hint">Scored the same way as the analyst&apos;s. A limit order fills when price reaches your entry.</div>
-                <select className="select" value={call.side} disabled={locked} onChange={(e) => setCall({ ...call, side: e.target.value })}>
+                <div className="hint">Scored the same way as the analyst&apos;s. A limit order fills when price reaches your entry. Once you reveal, the call is written down and can&apos;t change.</div>
+                <select className="select" value={call.side} disabled={decided || locked} onChange={(e) => setCall({ ...call, side: e.target.value })}>
                   <option value="">No call</option>
                   <option value="long">Long (buy)</option>
                   <option value="short">Short (sell)</option>
@@ -173,9 +186,22 @@ export default function ReplayPanel({ symbol, tf, replay, setReplay, onAnalysis 
                 <div className="grid-2" style={{ gap: 8 }}>
                   {[["entry", "Entry"], ["sl", "Stop"], ["tp", "Target"]].map(([k, l]) => (
                     <input key={k} className="input" type="number" step="any" placeholder={l} aria-label={l} value={call[k]}
-                      disabled={locked} onChange={(e) => setCall({ ...call, [k]: e.target.value })} />
+                      disabled={decided || locked} onChange={(e) => setCall({ ...call, [k]: e.target.value })} />
                   ))}
                 </div>
+                {call.side ? (
+                  <>
+                    <div className="label">How do you feel about it?</div>
+                    <div className="row wrap" style={{ gap: 6 }}>
+                      {FEELINGS.map(([k, l]) => (
+                        <button key={k} type="button" className={`chip ${feel === k ? "on" : ""}`} aria-pressed={feel === k}
+                          disabled={decided || locked} onClick={() => setFeel(feel === k ? "" : k)}>{l}</button>
+                      ))}
+                    </div>
+                    <textarea className="input" rows={2} maxLength={280} placeholder="Why this call? (optional)" aria-label="Why this call"
+                      value={note} disabled={decided || locked} onChange={(e) => setNote(e.target.value)} />
+                  </>
+                ) : null}
               </div>
 
               {!locked ? (
@@ -191,6 +217,12 @@ export default function ReplayPanel({ symbol, tf, replay, setReplay, onAnalysis 
                   <OutcomeCard title="Analyst" o={result.analyst} dec={dec} />
                   <OutcomeCard title="Your call" o={result.user} dec={dec} />
                   {!result.final ? <div className="hint">Not finished yet. Reveal again later to see the rest.</div> : null}
+                  {result.coach && result.coach.length ? (
+                    <div className="replay-card">
+                      <div className="replay-head"><span className="faint" style={{ fontSize: "0.8rem" }}>Coach</span></div>
+                      {result.coach.map((t, i) => <div key={i} className="hint" style={{ lineHeight: 1.5, marginTop: i ? 8 : 0 }}>{t}</div>)}
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </>

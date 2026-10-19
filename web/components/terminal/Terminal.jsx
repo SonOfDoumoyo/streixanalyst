@@ -21,6 +21,7 @@ import AIChat from "./AIChat";
 import Watchlist from "./Watchlist";
 import NewsPanel from "./NewsPanel";
 import ReviewModal from "./ReviewModal";
+import CrossMenu from "./CrossMenu";
 import DivergencePanel from "./DivergencePanel";
 import ReplayPanel from "./ReplayPanel";
 import { chartThemeFor } from "@/lib/chartTheme";
@@ -97,6 +98,7 @@ export default function Terminal() {
   const [watch, setWatch] = useState([]);
   const [hover, setHover] = useState(null);
   const [review, setReview] = useState({ open: false, prefill: null });
+  const [crossMenu, setCrossMenu] = useState(null);
   const [paywall, setPaywall] = useState(null);
   const [textEdit, setTextEdit] = useState(null);
   const [pendingAsk, setPendingAsk] = useState(null);
@@ -130,6 +132,7 @@ export default function Terminal() {
       cancelAnimationFrame(hoverRaf.current);
       hoverRaf.current = requestAnimationFrame(() => setHover(data));
     } else if (type === "select") setSelDrawing(data);
+    else if (type === "crossMenu") setCrossMenu(data);
     else if (type === "toolDone") setToolState("cursor");
     else if (type === "requestText") {
       const d = eng.current && eng.current.drawings.find((x) => x.id === data);
@@ -158,7 +161,8 @@ export default function Terminal() {
     if (!eng.current) return;
     eng.current.setTheme(theme);
     eng.current.setOptions({ style: settings.candles.style, volume: settings.chart.volume, logScale: settings.chart.logScale, rsi: settings.chart.rsi,
-      grid: settings.chart.grid, watermark: settings.chart.watermark, killzones: !!settings.chart.killzones, indicators: settings.indicators });
+      grid: settings.chart.grid, watermark: settings.chart.watermark, killzones: !!settings.chart.killzones, indicators: settings.indicators,
+      minCandle: settings.chart.minCandle });
     eng.current.drawingDefaults = settings.drawingDefaults;
     eng.current.setScale(scale);
   }, [engReady, theme, settings.candles.style, settings.chart, settings.indicators, settings.drawingDefaults, scale]);
@@ -230,7 +234,7 @@ export default function Terminal() {
     try {
       const d = await get(`/market/candles?${qs(rp ? { symbol: sym, tf: frame, bars: 600, at: rp.at, ahead: rp.ahead } : { symbol: sym, tf: frame, bars: 600 })}`);
       if (sym !== symbolRef.current || frame !== tfRef.current) return;
-      e.setData(d.candles, { tfSec: d.tf_seconds, decimals: d.decimals, label: `${d.display} · ${frame}` });
+      e.setData(d.candles, { tfSec: d.tf_seconds, decimals: d.decimals, label: `${d.display} · ${frame}`, keepWidth: true });
       setMeta(d);
       setChartState({ loading: false, error: null });
       // a replay analysis stays on its chart, also after a reveal reloads the candles
@@ -334,10 +338,28 @@ export default function Terminal() {
     if (!eng.current) return;
     eng.current.setAnalysis(ov.items, { animate: true, pins: ov.pins });
     if (d.view && d.meta && d.candles && d.candles.length) {
-      eng.current.fitTimes(d.candles[Math.max(0, d.view.x_from)][0], d.candles[d.candles.length - 1][0] + d.meta.tf_seconds * 30, 6);
+      eng.current.panTo(d.candles[Math.max(0, d.view.x_from)][0], d.candles[d.candles.length - 1][0] + d.meta.tf_seconds * 30);
     }
   };
   const showLimit = useCallback((e) => setPaywall({ message: e.message, detail: e.detail }), []);
+  const lineAt = (at) => {
+    const e = eng.current;
+    setCrossMenu(null);
+    if (!e) return;
+    const def = e.drawingDefaults || { color: "#2962ff", width: 2, dash: "solid" };
+    e.select(e.addDrawing({ type: "hline", points: [{ t: at.time, p: at.price }], style: { ...def } }));
+  };
+  const alertAt = async (at, op) => {
+    setCrossMenu(null);
+    const price = Number(Number(at.price).toFixed(at.decimals ?? 2));
+    try {
+      await post("/alerts", { kind: "price", symbol: symbolRef.current, op, price });
+      toast(`Alert set: ${op === "above" ? "rises above" : "falls below"} ${price}`, "success");
+    } catch (ex) {
+      if (ex instanceof ApiError && (ex.status === 402 || ex.status === 429)) showLimit(ex);
+      else toast(ex.message || "The alert couldn't be set.", "error");
+    }
+  };
 
   const analyse = useCallback(async () => {
     if (replayRef.current) {
@@ -370,7 +392,7 @@ export default function Terminal() {
       if (d.view && d.candles && d.candles.length) {
         const from = d.candles[Math.max(0, Math.min(d.candles.length - 1, d.view.x_from))][0];
         const last = d.candles[d.candles.length - 1][0];
-        eng.current.fitTimes(from, last + ((d.meta && d.meta.tf_seconds) || 3600) * 30, 6);
+        eng.current.panTo(from, last + ((d.meta && d.meta.tf_seconds) || 3600) * 30);
       }
       if (narrow && !mobile) setPanelOpen(true);
       refresh();
@@ -504,6 +526,20 @@ export default function Terminal() {
     eng.current.select(id);
   };
 
+  // The AI plan becomes a trade on the chart, with the entry, stop and target as handles the person can drag.
+  // Review (on the trade's toolbar) then grades the levels as they are now.
+  const editPlan = (p) => {
+    const tps = p.tps || [];
+    const tp = tps[Math.min(1, tps.length - 1)];
+    if (!p.entry || !p.sl || !tp) {
+      toast("This plan has no entry, stop and target to edit yet.", "info");
+      return;
+    }
+    placeTrade({ side: p.side, entry: p.entry, sl: p.sl, tp });
+    if (narrow) setPanelOpen(false);
+    toast("Drag the entry, stop or target to change the plan, then tap Review to grade your edits.", "info");
+  };
+
   const ent = user && user.entitlements;
   const display = (meta && meta.display) || symbol;
   const legendCandle = hover && hover.candle ? hover.candle : eng.current && eng.current.d.length ? eng.current.d[eng.current.d.length - 1] : null;
@@ -529,7 +565,8 @@ export default function Terminal() {
         {tab === "analysis" ? (
           <AnalysisPanel res={res} busy={busy} step={step} steps={ANALYSIS_STEPS} onAnalyse={analyse} onAsk={ask} onClean={cleanAnalysis} onUpgrade={() => setPaywall({ message: "Upgrade to Pro for both report styles and the model statistics." })}
             hiddenLayers={hiddenLayers} toggleLayer={toggleLayer} layers={layers} detail={detail} setDetail={setDetail} showAlt={showAlt}
-            setShowAlt={(b) => { setShowAlt(b); updateSettings({ analysis: { showAlt: b } }); }} stale={stale} symbolLabel={display} tf={tf} symbol={symbol} />
+            setShowAlt={(b) => { setShowAlt(b); updateSettings({ analysis: { showAlt: b } }); }} stale={stale} symbolLabel={display} tf={tf} symbol={symbol}
+            onEditPlan={editPlan} />
         ) : null}
         {tab === "ai" ? (
           <AIChat symbol={symbol} tf={tf} analysisId={res && res.analysis_id} pending={pendingAsk} clearPending={() => setPendingAsk(null)} onLimit={showLimit} />
@@ -829,6 +866,7 @@ export default function Terminal() {
         </nav>
       ) : null}
 
+      <CrossMenu at={crossMenu} onClose={() => setCrossMenu(null)} onLine={lineAt} onAlert={alertAt} />
       <ReviewModal open={review.open} onClose={() => setReview({ open: false, prefill: null })} symbol={symbol} tf={tf} prefill={review.prefill}
         price={meta && meta.price} decimals={dec} settings={settings} onLimit={showLimit} onShowOnChart={placeTrade} />
       <Paywall open={!!paywall} onClose={() => setPaywall(null)} info={paywall} />

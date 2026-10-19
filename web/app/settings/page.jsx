@@ -238,6 +238,13 @@ function SettingsInner() {
                 {[["volume", "Show volume"], ["grid", "Show grid"], ["rsi", "RSI pane"], ["logScale", "Logarithmic price scale"], ["watermark", "Symbol watermark"], ["killzones", "Killzone windows (London, New York)"]].map(([k, l]) => (
                   <label key={k} className="check"><input type="checkbox" checked={!!settings.chart[k]} onChange={(e) => updateSettings({ chart: { [k]: e.target.checked } })} /> {l}</label>
                 ))}
+                <div className="label">Narrowest candle when pinching in</div>
+                <div className="row" style={{ gap: 12, alignItems: "center" }}>
+                  <input type="range" min={1} max={10} step={1} value={settings.chart.minCandle ?? 2} aria-label="Narrowest candle in pixels"
+                    onChange={(e) => updateSettings({ chart: { minCandle: Number(e.target.value) } })} style={{ flex: 1 }} />
+                  <span className="muted" style={{ minWidth: 44 }}>{settings.chart.minCandle ?? 2} px</span>
+                </div>
+                <div className="hint">Pinching in narrows the candles down to this width and no further. Zoom is only ever changed by you.</div>
                 <div className="label">Interface</div>
                 <div className="seg brand">
                   <button className={settings.theme !== "light" ? "on" : ""} onClick={() => updateSettings({ theme: "dark" })}><Icon name="moon" size={14} /> Dark</button>
