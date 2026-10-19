@@ -1058,6 +1058,68 @@ def t_replay_decisions(c):
           and mine[0]["side"] == "long" and mine[0]["entry"] == px, ("export", mine))
 
 
+def t_behaviour_model(_c):
+    """The behaviour model ships only when it beats the baseline on calls it has not seen. The calls here are generated
+    to exercise the code (a clear pattern, no pattern, too few calls); they are not real data and are never shipped."""
+    import contextlib
+    import io
+    import json
+    import os
+    import random
+    import tempfile
+    from datetime import datetime, timedelta
+    from app.services import behaviour as bm
+    from app.services.psychology import EMOTIONS
+
+    def make(n, seed, revenge_win=0.2, chase_penalty=0.15):
+        rnd = random.Random(seed)
+        out = []
+        for i in range(n):
+            feel = rnd.choice(list(EMOTIONS) + [None])
+            chased = rnd.random() < 0.3
+            p = revenge_win if feel == "revenge" else 0.5
+            if chased:
+                p -= chase_penalty
+            win = rnd.random() < p
+            out.append(dict(id=i + 1, decided_at=(datetime(2026, 1, 1) + timedelta(minutes=i)).isoformat() + "Z",
+                            side="long", entry=100.0, sl=98.0, tp=104.0 if rnd.random() < 0.5 else 103.0,
+                            emotion=feel, chased=chased, quick_after_loss=rnd.random() < 0.2,
+                            streak_before=rnd.randint(0, 3), settled=True, r=2.0 if win else -1.0))
+        return out
+
+    strong = make(400, seed=7)
+    m = bm.train(strong)
+    check(m["ship"] is True, m["reason"])
+    w = dict(zip(bm.FEATURES, m["weights"]))
+    check(w["feel_revenge"] < 0 and w["chased"] < 0, w)
+    check(m["card"]["improvement"] > 0 and m["card"]["train_calls"] + m["card"]["test_calls"] == 400, m["card"])
+    rev = dict(strong[0], emotion="revenge", chased=False, quick_after_loss=False, streak_before=0)
+    p_rev, p_calm = bm.predict(m, rev), bm.predict(m, dict(rev, emotion="calm"))
+    check(p_rev is not None and 0 < p_rev < p_calm < 1, (p_rev, p_calm))
+    check(bm.predict(m, dict(rev, entry=None)) is None, "a call with no levels cannot be scored")
+    check(bm.predict(dict(m, features=["x"]), rev) is None, "a model from another version is not used")
+
+    flat = make(400, seed=3, revenge_win=0.5, chase_penalty=0.0)
+    check(bm.train(flat)["ship"] is False, "calls with no pattern in them must not ship a model")
+
+    few = bm.train(make(150, seed=7))
+    check(few["ship"] is False and few["weights"] is None and "200" in few["reason"], few)
+    check(bm.predict(few, rev) is None, "with no shipped model nothing is scored")
+    open_calls = [dict(d, settled=False, r=None) for d in strong[:50]]
+    check(bm.train(strong[:150] + open_calls)["settled"] == 150, "calls still open are left out of the fit")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src, out_path = os.path.join(tmp, "decisions.jsonl"), os.path.join(tmp, "behaviour.json")
+        with open(src, "w", encoding="utf-8") as f:
+            for d in strong:
+                f.write(json.dumps(d) + "\n")
+        with contextlib.redirect_stdout(io.StringIO()):
+            bm.main([src, "--out", out_path])
+        again = bm.load(out_path)
+    check(again["ship"] is True and bm.predict(again, rev) == p_rev,
+          "the command line reads a JSON Lines export, and a saved model scores the same after reading it back")
+
+
 def main():
     t0 = time.time()
     with client() as c:
@@ -1081,6 +1143,7 @@ def main():
         run("t_email_verification", t_email_verification, client())
         run("t_psychology", t_psychology, None)
         run("t_replay_decisions", t_replay_decisions, client())
+        run("t_behaviour_model", t_behaviour_model, None)
         for t in (t_terms_and_site, t_stage2, t_practice, t_strategy, t_scalp_template, t_tracker_rules, t_track_record, t_alerts, t_push, t_replay,
                   t_learning_export):
             run(t.__name__, t, client())
