@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import current_user
+from ..deps import current_user, verified_user
 from ..models import SavedStrategy, User, iso, jdump, jload
 from ..plans import consume, refund, require_feature
 from ..services import strategy as stg
@@ -38,7 +38,7 @@ def library(user: User = Depends(current_user)):
 
 
 @router.post("/parse")
-def parse(body: ParseIn, user: User = Depends(current_user)):
+def parse(body: ParseIn, user: User = Depends(verified_user)):
     require_feature(user, "strategy")
     try:
         spec, notes, used_ai = stg.parse_text(body.text)
@@ -48,7 +48,7 @@ def parse(body: ParseIn, user: User = Depends(current_user)):
 
 
 @router.post("/run")
-def run(body: RunIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def run(body: RunIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     require_feature(user, "strategy")
     consume(db, user, "strategy")
     try:
@@ -79,7 +79,7 @@ def saved(user: User = Depends(current_user), db: Session = Depends(get_db)):
 
 
 @router.post("/saved")
-def save(body: SaveIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def save(body: SaveIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     require_feature(user, "strategy")
     try:
         spec = stg.sanitize(dict(body.spec, name=body.name))
@@ -95,7 +95,7 @@ def save(body: SaveIn, user: User = Depends(current_user), db: Session = Depends
 
 
 @router.put("/saved/{sid}")
-def update(sid: int, body: SaveIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def update(sid: int, body: SaveIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     row = db.get(SavedStrategy, sid)
     if not row or row.user_id != user.id:
         raise HTTPException(404, "Strategy not found.")
@@ -109,7 +109,7 @@ def update(sid: int, body: SaveIn, user: User = Depends(current_user), db: Sessi
 
 
 @router.delete("/saved/{sid}")
-def delete(sid: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def delete(sid: int, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     row = db.get(SavedStrategy, sid)
     if not row or row.user_id != user.id:
         raise HTTPException(404, "Strategy not found.")

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_db
-from ..deps import client_ip, optional_user
+from ..deps import check_verified, client_ip, optional_user
 from ..models import Donation, User
 from ..security import RateLimiter
 from ..services import donations, paystack
@@ -32,6 +32,7 @@ def config():
 
 @router.post("")
 def donate(body: DonateIn, request: Request, user: User | None = Depends(optional_user), db: Session = Depends(get_db)):
+    check_verified(user)                   # a signed-in account confirms its email first; anonymous donors are unaffected
     if not donate_limiter.hit(client_ip(request)):
         raise HTTPException(429, "Too many donation attempts from this network. Please try again later.")
     if not settings.paystack_enabled:

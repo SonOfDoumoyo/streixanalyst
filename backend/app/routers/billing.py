@@ -11,12 +11,12 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_db
-from ..deps import current_user
+from ..deps import current_user, verified_user
 from ..models import Payment, User, VirtualAccount, iso
 from ..plans import plans_overview, quote
 from ..security import random_code
 from ..serialize import payment_out, user_out
-from ..services import billing, crypto, mailer, opay, paystack
+from ..services import billing, crypto, opay, paystack
 
 log = logging.getLogger("streix.billing")
 router = APIRouter(prefix="/billing", tags=["billing"])
@@ -62,12 +62,6 @@ def plans(db: Session = Depends(get_db)):
     return out
 
 
-def _require_verified(user):
-    if mailer.configured() and not user.email_verified:
-        raise HTTPException(403, "Confirm your email first. Check your inbox for the link, or ask for a new one "
-                                 "from your account page.")
-
-
 def _new_payment(db, user, body, provider, method=None, status="pending", prefix="SA"):
     q = quote(db, body.plan, body.months, body.seats)
     pay = Payment(user_id=user.id, reference=billing.new_reference(prefix), provider=provider, method=method,
@@ -90,8 +84,7 @@ def _crypto_checkout(db, user, body):
 
 
 @router.post("/checkout")
-def checkout(body: CheckoutIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    _require_verified(user)
+def checkout(body: CheckoutIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     if body.provider == "crypto":
         return _crypto_checkout(db, user, body)
     if body.provider == "paystack":
@@ -204,8 +197,7 @@ def get_dva(user: User = Depends(current_user), db: Session = Depends(get_db)):
 
 
 @router.post("/dva")
-def create_dva(user: User = Depends(current_user), db: Session = Depends(get_db)):
-    _require_verified(user)
+def create_dva(user: User = Depends(verified_user), db: Session = Depends(get_db)):
     if not methods(db)["dedicated_account"]:
         raise HTTPException(503, "Personal account numbers aren't switched on yet.")
     if not user.phone:
@@ -235,8 +227,7 @@ def create_dva(user: User = Depends(current_user), db: Session = Depends(get_db)
 
 
 @router.post("/dva/intent")
-def dva_intent(body: IntentIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
-    _require_verified(user)
+def dva_intent(body: IntentIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     va = db.execute(select(VirtualAccount).where(VirtualAccount.user_id == user.id)).scalar_one_or_none()
     if not va or va.status != "active":
         raise HTTPException(409, "Create your account number first.")
@@ -249,7 +240,7 @@ def dva_intent(body: IntentIn, user: User = Depends(current_user), db: Session =
 
 # ── transfer to the company's OPay / UBA accounts, then upload proof
 @router.post("/manual/start")
-def manual_start(body: ManualIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def manual_start(body: ManualIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     accts = billing.manual_accounts(db)
     if not accts:
         raise HTTPException(503, "Bank transfer isn't available right now.")
@@ -268,7 +259,7 @@ def manual_start(body: ManualIn, user: User = Depends(current_user), db: Session
 
 @router.post("/manual/{reference}/proof")
 async def manual_proof(reference: str, payer_name: str = Form(..., max_length=160), note: str = Form("", max_length=500),
-                       file: UploadFile = File(...), user: User = Depends(current_user), db: Session = Depends(get_db)):
+                       file: UploadFile = File(...), user: User = Depends(verified_user), db: Session = Depends(get_db)):
     pay = _mine(db, user, reference)
     if pay.provider != "manual" or pay.status not in ("awaiting_transfer", "review", "rejected"):
         raise HTTPException(409, "This payment can't take a receipt.")
@@ -300,7 +291,7 @@ def my_payments(user: User = Depends(current_user), db: Session = Depends(get_db
 
 
 @router.post("/payments/{reference}/cancel")
-def cancel(reference: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def cancel(reference: str, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     pay = _mine(db, user, reference)
     if pay.applied or pay.status not in ("pending", "awaiting_transfer"):
         raise HTTPException(409, "This payment can't be cancelled.")

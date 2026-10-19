@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import current_user
+from ..deps import current_user, verified_user
 from ..models import AnalysisLog, User, iso, jdump, jload
 from ..plans import consume, features_of, refund, require_feature, tier_of
 from ..services import engine
@@ -56,7 +56,7 @@ def _clean_drawings(items):
 
 
 @router.post("/run")
-def run(body: AnalyzeIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def run(body: AnalyzeIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     require_feature(user, "analysis")
     consume(db, user, "analysis")
     mode = _mode(user, body.mode)
@@ -88,7 +88,7 @@ def run(body: AnalyzeIn, user: User = Depends(current_user), db: Session = Depen
 
 
 @router.post("/review")
-def review(body: ReviewIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def review(body: ReviewIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     require_feature(user, "review")
     consume(db, user, "review")
     try:

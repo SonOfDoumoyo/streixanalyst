@@ -5,7 +5,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import current_user
+from ..deps import current_user, verified_user
 from ..models import Alert, Notification, SavedStrategy, User, iso, utcnow
 from ..plans import limits_of, require_feature, tier_of
 from ..services import engine
@@ -68,7 +68,7 @@ def list_alerts(user: User = Depends(current_user), db: Session = Depends(get_db
 
 
 @router.post("")
-def create_alert(body: AlertIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def create_alert(body: AlertIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     require_feature(user, "alerts")
     _check_room(db, user)
     sym = body.symbol.strip().upper()
@@ -98,7 +98,7 @@ def create_alert(body: AlertIn, user: User = Depends(current_user), db: Session 
 
 
 @router.patch("/{aid}")
-def patch_alert(aid: int, body: AlertPatch, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def patch_alert(aid: int, body: AlertPatch, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     a = db.get(Alert, aid)
     if not a or a.user_id != user.id:
         raise HTTPException(404, "Alert not found.")
@@ -117,7 +117,7 @@ def patch_alert(aid: int, body: AlertPatch, user: User = Depends(current_user), 
 
 
 @router.delete("/{aid}")
-def delete_alert(aid: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def delete_alert(aid: int, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     a = db.get(Alert, aid)
     if not a or a.user_id != user.id:
         raise HTTPException(404, "Alert not found.")
@@ -139,7 +139,7 @@ def notifications(after: int = 0, user: User = Depends(current_user), db: Sessio
 
 
 @router.post("/notifications/read")
-def mark_read(body: ReadIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def mark_read(body: ReadIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     q = update(Notification).where(Notification.user_id == user.id, Notification.read_at.is_(None))
     if not body.all:
         if not body.ids:

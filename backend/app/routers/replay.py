@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import current_user
+from ..deps import current_user, verified_user
 from ..models import AnalysisLog, User, iso, jdump, jload, utcnow
 from ..plans import consume, features_of, refund, require_feature, tier_of
 from ..services import engine
@@ -41,7 +41,7 @@ def _json(d):
 
 
 @router.post("/analyze")
-def analyze(body: AnalyzeIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def analyze(body: AnalyzeIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     require_feature(user, "analysis")
     consume(db, user, "analysis")
     mode = _mode(user, body.mode)
@@ -77,7 +77,7 @@ def analyze(body: AnalyzeIn, user: User = Depends(current_user), db: Session = D
 
 
 @router.post("/reveal")
-def reveal(body: RevealIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def reveal(body: RevealIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     row = db.get(AnalysisLog, body.replay_id)
     if not row or row.user_id != user.id or row.kind != "replay":
         raise HTTPException(404, "Replay not found.")

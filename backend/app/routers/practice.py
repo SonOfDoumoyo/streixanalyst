@@ -7,7 +7,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import current_user
+from ..deps import current_user, verified_user
 from ..models import AnalysisLog, PracticeAttempt, User, iso, jdump, jload, utcnow
 from ..plans import consume, refund, require_feature
 from ..services import engine, practice
@@ -43,7 +43,7 @@ def daily():
 
 
 @router.get("/challenge")
-def challenge(user: User = Depends(current_user), db: Session = Depends(get_db)):
+def challenge(user: User = Depends(verified_user), db: Session = Depends(get_db)):
     c = daily()
     best = db.execute(select(func.max(PracticeAttempt.score)).where(PracticeAttempt.user_id == user.id,
                                                                     PracticeAttempt.challenge == c["id"])).scalar()
@@ -53,7 +53,7 @@ def challenge(user: User = Depends(current_user), db: Session = Depends(get_db))
 
 
 @router.post("/score")
-def score(body: ScoreIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def score(body: ScoreIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     require_feature(user, "practice")
     drawings = _clean_drawings(body.drawings)
     if not drawings and not body.trade and not body.bias:

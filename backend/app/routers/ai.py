@@ -10,7 +10,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal, get_db
-from ..deps import current_user
+from ..deps import current_user, verified_user
 from ..models import AnalysisLog, ChatMessage, User, iso, jdump, jload, utcnow
 from ..plans import consume, require_feature, tier_of
 from ..services import engine, streixai
@@ -44,7 +44,7 @@ def _sse(obj):
 
 
 @router.post("/chat")
-def chat(body: ChatIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def chat(body: ChatIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     require_feature(user, "streixai")
     consume(db, user, "ai")
     tier = tier_of(user)
@@ -113,7 +113,7 @@ def thread(thread_id: str, user: User = Depends(current_user), db: Session = Dep
 
 
 @router.delete("/threads/{thread_id}")
-def delete_thread(thread_id: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def delete_thread(thread_id: str, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     db.execute(delete(ChatMessage).where(ChatMessage.user_id == user.id, ChatMessage.thread_id == thread_id))
     db.commit()
     return dict(ok=True)

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..db import get_db
-from ..deps import current_user
+from ..deps import current_user, verified_user
 from ..models import PushSubscription, User
 from ..plans import require_feature
 from ..services import push
@@ -42,7 +42,7 @@ def status(user: User = Depends(current_user), db: Session = Depends(get_db)):
 
 
 @router.post("/subscribe")
-def subscribe(body: SubIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def subscribe(body: SubIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     _need_keys()
     require_feature(user, "alerts")
     if not body.endpoint.startswith("https://"):
@@ -62,7 +62,7 @@ def subscribe(body: SubIn, user: User = Depends(current_user), db: Session = Dep
 
 
 @router.post("/unsubscribe")
-def unsubscribe(body: EndpointIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def unsubscribe(body: EndpointIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     db.execute(delete(PushSubscription).where(PushSubscription.user_id == user.id,
                                               PushSubscription.endpoint == body.endpoint))
     db.commit()
@@ -70,7 +70,7 @@ def unsubscribe(body: EndpointIn, user: User = Depends(current_user), db: Sessio
 
 
 @router.post("/test")
-def send_test(user: User = Depends(current_user), db: Session = Depends(get_db)):
+def send_test(user: User = Depends(verified_user), db: Session = Depends(get_db)):
     _need_keys()
     require_feature(user, "alerts")
     counts = push.send_to_user(db, user.id, "Phone alerts are on", "This is a test from StreixAnalyst.", "/terminal")

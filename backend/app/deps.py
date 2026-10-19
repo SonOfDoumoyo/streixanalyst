@@ -5,8 +5,11 @@ from sqlalchemy.orm import Session
 from .db import get_db
 from .models import User, utcnow
 from .security import COOKIE, read_token
+from .services import mailer
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+UNVERIFIED_MESSAGE = ("Confirm your email first. Check your inbox for the link, or ask for a new one "
+                      "from your account page.")
 
 
 def _token_from(request: Request):
@@ -43,6 +46,18 @@ def optional_user(request: Request, db: Session = Depends(get_db)):
 def current_user(user: User | None = Depends(optional_user)):
     if user is None:
         raise HTTPException(401, "Please sign in.")
+    return user
+
+
+def check_verified(user: User | None):
+    """Once email is set up on this server, a signed-in account must confirm its email before it can act.
+    Reading the chart, the account and support stay open so the person can get to the confirmation."""
+    if user is not None and mailer.configured() and not user.email_verified:
+        raise HTTPException(403, detail=dict(code="email_unverified", message=UNVERIFIED_MESSAGE))
+
+
+def verified_user(user: User = Depends(current_user)):
+    check_verified(user)
     return user
 
 

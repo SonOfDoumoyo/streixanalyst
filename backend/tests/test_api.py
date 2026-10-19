@@ -952,6 +952,42 @@ def t_direction_view(_c):
     check(gm.FallbackBrain().direction_bar(None)["calibrated"] is False, "no trained brain: no bar numbers")
 
 
+def t_email_verification(_c):
+    """Once email is set up, a new account confirms its email before it can act. Reading the account and the chart
+    stays open; the link from the email confirms the account and unlocks the actions."""
+    from app.config import settings as cfg
+    from app.services import mailer
+    sent = []
+    real_send, real_host = mailer.send, cfg.smtp_host
+    mailer.send = lambda to, subject, text, html=None: sent.append((to, text)) or True
+    cfg.smtp_host = "smtp.test"
+    try:
+        c = client()
+        r = signup(c, "verify.me@example.com")
+        check(r.status_code == 201 and r.json()["user"]["email_verified"] is False, "a new account starts unconfirmed")
+        check(sent and sent[-1][0] == "verify.me@example.com", "the confirmation email goes to the account's address")
+        link = next(w for w in sent[-1][1].split() if "/verify?token=" in w)
+        token = link.split("token=", 1)[1]
+
+        r = c.post("/api/user/watchlist", json=dict(symbol="EURUSD"), headers=H)
+        check(r.status_code == 403 and r.json()["detail"]["code"] == "email_unverified", ("action refused", r.status_code))
+        check(c.get("/api/user/watchlist").status_code == 200, "reading the watchlist stays open")
+        check(c.get("/api/auth/me").json()["user"]["email_verified"] is False, "the account reports it is unconfirmed")
+
+        check(c.post("/api/auth/verify-email", json=dict(token="not-the-token"), headers=H).status_code == 400,
+              "a wrong link does not confirm")
+        r = c.post("/api/auth/verify-email", json=dict(token=token), headers=H)
+        check(r.status_code == 200 and r.json()["user"]["email_verified"] is True, "the link confirms the account")
+        check(c.post("/api/user/watchlist", json=dict(symbol="EURUSD"), headers=H).status_code == 200,
+              "actions are open after confirming")
+        check(c.post("/api/auth/verify-email", json=dict(token=token), headers=H).status_code == 400,
+              "a used link cannot be used again")
+        check(c.post("/api/auth/resend-verification", headers=H).json()["message"].startswith("Your email is already"),
+              "resend says it is already confirmed")
+    finally:
+        mailer.send, cfg.smtp_host = real_send, real_host
+
+
 def main():
     t0 = time.time()
     with client() as c:
@@ -972,6 +1008,7 @@ def main():
         run("t_password_change", t_password_change, None)
         run("t_brain_version", t_brain_version, None)
         run("t_direction_view", t_direction_view, None)
+        run("t_email_verification", t_email_verification, client())
         for t in (t_terms_and_site, t_stage2, t_practice, t_strategy, t_scalp_template, t_tracker_rules, t_track_record, t_alerts, t_push, t_replay,
                   t_learning_export):
             run(t.__name__, t, client())

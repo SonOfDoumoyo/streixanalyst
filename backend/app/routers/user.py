@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..deps import current_user
+from ..deps import current_user, verified_user
 from ..models import Organization, SavedAnalysis, SavedDrawing, User, WatchItem, iso, jdump, jload
 from ..plans import limits_of, tier_of
 from ..security import random_code
@@ -34,7 +34,7 @@ def get_drawings(symbol: str, user: User = Depends(current_user), db: Session = 
 
 
 @router.put("/drawings")
-def put_drawings(body: DrawingsIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def put_drawings(body: DrawingsIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     sym = _sym(body.symbol)
     if len(body.items) > 500:
         raise HTTPException(413, "Too many drawings on one chart (max 500).")
@@ -79,7 +79,7 @@ def get_analysis(symbol: str, tf: str, user: User = Depends(current_user), db: S
 
 
 @router.put("/analysis")
-def put_analysis(body: AnalysisIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def put_analysis(body: AnalysisIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     sym, frame = _sym(body.symbol), _tf(body.tf)
     blob = jdump(body.data)
     if len(blob) > 1_500_000:
@@ -94,7 +94,7 @@ def put_analysis(body: AnalysisIn, user: User = Depends(current_user), db: Sessi
 
 
 @router.delete("/analysis")
-def delete_analysis(symbol: str, tf: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def delete_analysis(symbol: str, tf: str, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     row = _analysis_row(db, user, _sym(symbol), _tf(tf))
     if row is not None:
         db.delete(row)
@@ -114,7 +114,7 @@ class WatchIn(BaseModel):
 
 
 @router.post("/watchlist")
-def add_watch(body: WatchIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def add_watch(body: WatchIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     sym = _sym(body.symbol)
     rows = db.execute(select(WatchItem).where(WatchItem.user_id == user.id)).scalars().all()
     if any(r.symbol == sym for r in rows):
@@ -129,7 +129,7 @@ def add_watch(body: WatchIn, user: User = Depends(current_user), db: Session = D
 
 
 @router.delete("/watchlist/{symbol:path}")
-def remove_watch(symbol: str, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def remove_watch(symbol: str, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     row = db.execute(select(WatchItem).where(WatchItem.user_id == user.id,
                                              WatchItem.symbol == _sym(symbol))).scalar_one_or_none()
     if row:
@@ -143,7 +143,7 @@ class OrderIn(BaseModel):
 
 
 @router.put("/watchlist")
-def reorder_watch(body: OrderIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def reorder_watch(body: OrderIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     rows = {r.symbol: r for r in db.execute(select(WatchItem).where(WatchItem.user_id == user.id)).scalars()}
     for i, s in enumerate(body.symbols):
         if s.upper() in rows:
@@ -179,7 +179,7 @@ def my_org(user: User = Depends(current_user), db: Session = Depends(get_db)):
 
 
 @router.post("/org/join")
-def org_join(body: JoinIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def org_join(body: JoinIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     if user.org_id and user.org_role == "owner":
         raise HTTPException(409, "You own an organization. Transfer it before joining another.")
     join_org(db, user, body.code)
@@ -188,7 +188,7 @@ def org_join(body: JoinIn, user: User = Depends(current_user), db: Session = Dep
 
 
 @router.post("/org/leave")
-def org_leave(user: User = Depends(current_user), db: Session = Depends(get_db)):
+def org_leave(user: User = Depends(verified_user), db: Session = Depends(get_db)):
     if user.org_role == "owner":
         raise HTTPException(409, "Owners can't leave their own organization.")
     user.org_id, user.org_role = None, None
@@ -197,7 +197,7 @@ def org_leave(user: User = Depends(current_user), db: Session = Depends(get_db))
 
 
 @router.patch("/org")
-def org_update(body: OrgIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def org_update(body: OrgIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     if user.org_role != "owner":
         raise HTTPException(403, "Only the owner can change the organization.")
     org = db.get(Organization, user.org_id)
@@ -210,7 +210,7 @@ def org_update(body: OrgIn, user: User = Depends(current_user), db: Session = De
 
 
 @router.post("/org/invite-code")
-def org_new_code(user: User = Depends(current_user), db: Session = Depends(get_db)):
+def org_new_code(user: User = Depends(verified_user), db: Session = Depends(get_db)):
     if user.org_role != "owner":
         raise HTTPException(403, "Only the owner can do that.")
     org = db.get(Organization, user.org_id)
@@ -224,7 +224,7 @@ class MemberIn(BaseModel):
 
 
 @router.patch("/org/members/{member_id}")
-def org_member(member_id: int, body: MemberIn, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def org_member(member_id: int, body: MemberIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     if user.org_role != "owner":
         raise HTTPException(403, "Only the owner can do that.")
     m = db.get(User, member_id)
@@ -238,7 +238,7 @@ def org_member(member_id: int, body: MemberIn, user: User = Depends(current_user
 
 
 @router.delete("/org/members/{member_id}")
-def org_remove(member_id: int, user: User = Depends(current_user), db: Session = Depends(get_db)):
+def org_remove(member_id: int, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     if user.org_role != "owner":
         raise HTTPException(403, "Only the owner can do that.")
     m = db.get(User, member_id)

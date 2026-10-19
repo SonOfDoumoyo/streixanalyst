@@ -28,6 +28,15 @@ function messageFrom(data, status) {
   return `Request failed (${status}).`;
 }
 
+// The server answers 403 with code "email_unverified" for any action from an account whose email isn't confirmed yet.
+// VerifyGate listens for this and asks the person to confirm their email, rather than leaving an unexplained error.
+function noteUnverified(status, data) {
+  const d = data && data.detail;
+  if (status === 403 && d && typeof d === "object" && d.code === "email_unverified" && typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("streix:email-unverified"));
+  }
+}
+
 export async function api(path, { method = "GET", body, form, signal, headers = {} } = {}) {
   const h = { "X-Requested-With": "streix", ...headers };
   let payload;
@@ -49,7 +58,10 @@ export async function api(path, { method = "GET", body, form, signal, headers = 
     // a plain-text body (for example "Internal Server Error" from a proxy) is never shown raw; the status decides the message
     try { data = JSON.parse(text); } catch { data = null; }
   }
-  if (!res.ok) throw new ApiError(messageFrom(data, res.status), res.status, data && data.detail);
+  if (!res.ok) {
+    noteUnverified(res.status, data);
+    throw new ApiError(messageFrom(data, res.status), res.status, data && data.detail);
+  }
   return data;
 }
 
@@ -75,6 +87,7 @@ export async function stream(path, body, onEvent, signal) {
   if (!res.ok) {
     let data = null;
     try { data = await res.json(); } catch { /* not json */ }
+    noteUnverified(res.status, data);
     throw new ApiError(messageFrom(data, res.status), res.status, data && data.detail);
   }
   const reader = res.body.getReader();
