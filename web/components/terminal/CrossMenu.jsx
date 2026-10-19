@@ -1,6 +1,6 @@
 "use client";
-// The crosshair menu, opened by tapping the crosshair's price tag or right-clicking the chart. It offers a
-// horizontal line or a price alert at the price under the crosshair, like TradingView.
+// The crosshair menu, opened when a finger lifts after holding the crosshair, or by right-clicking the chart. It
+// offers a horizontal line or a price alert at the price under the crosshair, like TradingView.
 import { useEffect } from "react";
 
 export default function CrossMenu({ at, onClose, onLine, onAlert }) {

@@ -694,9 +694,9 @@ export class ChartEngine {
     const touch = e.pointerType === "touch";
     if (this.pointers.size === 2) {
       const [a, b] = [...this.pointers.values()];
-      // two fingers: apart horizontally zooms time (bar width), apart vertically zooms the price scale
-      this.drag = { mode: "pinch", dx0: Math.abs(a.x - b.x), dy0: Math.abs(a.y - b.y), sp0: this.spacing,
-        i0: this.index((a.x + b.x) / 2), right0: this.right, pmin0: this.pmin, pmax0: this.pmax };
+      // two fingers: apart sideways zooms the candle width only; the price scale is the price pane's job
+      this.drag = { mode: "pinch", dx0: Math.abs(a.x - b.x), sp0: this.spacing,
+        i0: this.index((a.x + b.x) / 2), right0: this.right };
       this.placing = null;
       this.hover = null;          // a second finger ends the crosshair
       this.emit("hover", null);
@@ -731,19 +731,10 @@ export class ChartEngine {
         return;
       }
     }
-    // The crosshair is up: holding and moving it moves the crosshair, and it stays up. A tap without moving hides it.
-    if (touch && this.hover && this.hover.touch) {
-      clearTimeout(this._pressT);
-      this.drag = { mode: "cross", x0: x, y0: y, moved: false, hideOnTap: true };
-      this.hover = { x: clamp(x, 0, this.plotW), y: clamp(y, 0, this.mainH), area: "plot", touch: true };
-      this._emitHover();
-      this.dirty();
-      return;
-    }
     this.drag = { mode: "pan", x0: x, y0: y, right0: this.right, pmin: this.pmin, pmax: this.pmax, moved: false, touch,
       t0: performance.now(), far: false };
-    // touch: holding still turns the press into a crosshair that follows the finger, like TradingView.
-    // Moving more than 10px first keeps it a pan.
+    // touch: holding still turns the press into a crosshair that follows the finger, like TradingView. Lifting the
+    // finger removes it (onUp). Moving more than 10px first keeps it a pan.
     if (touch) {
       clearTimeout(this._pressT);
       this._pressT = setTimeout(() => {
@@ -824,21 +815,12 @@ export class ChartEngine {
     if (dr && dr.mode === "pinch" && this.pointers.size >= 2) {
       const [a, b] = [...this.pointers.values()];
       const dx = Math.abs(a.x - b.x);
-      const dy = Math.abs(a.y - b.y);
       const mid = (a.x + b.x) / 2;
+      // Fingers apart sideways change the candle width and nothing else. The price scale only moves from the price
+      // pane, so a sideways pinch can never stretch the right-hand scale.
       if (dr.dx0 > 30) this.spacing = clamp(dr.sp0 * (dx / dr.dx0), this._minSp(), 80 * this.scale);
       this.right = dr.i0 + (this.plotW - mid) / this.spacing;
       this._clampRight();
-      if (dr.dy0 > 30 && dy > 0) {
-        // fingers further apart vertically show a smaller price range (zoom in)
-        this.auto = false;
-        const a0 = this._f(dr.pmin0);
-        const b0 = this._f(dr.pmax0);
-        const m = (a0 + b0) / 2;
-        const half = ((b0 - a0) / 2) * (dr.dy0 / dy);
-        this.pmin = this._fi(m - half);
-        this.pmax = this._fi(m + half);
-      }
       this.dirty();
       return;
     }
@@ -880,8 +862,7 @@ export class ChartEngine {
             const b = this._f(dr.pmax);
             const [top, bot] = this._pads();
             const dv = ((y - dr.y0) / (this.mainH - top - bot)) * (b - a);
-            this.pmin = this._fi(a + dv);
-            this.pmax = this._fi(b + dv);
+            this._setY((a + b) / 2 + dv, b - a);
           }
         }
         this.canvas.style.cursor = "grabbing";
@@ -898,10 +879,7 @@ export class ChartEngine {
         const f = Math.exp((y - dr.y0) * 0.006);
         const a = this._f(dr.pmin);
         const b = this._f(dr.pmax);
-        const mid = (a + b) / 2;
-        const half = ((b - a) / 2) * f;
-        this.pmin = this._fi(mid - half);
-        this.pmax = this._fi(mid + half);
+        this._setY((a + b) / 2, (b - a) * f);
         this.dirty();
         return;
       }
@@ -978,12 +956,11 @@ export class ChartEngine {
       return;
     }
     if (dr.mode === "cross") {
-      // A press that starts with the crosshair up and does not move is a tap, and it hides the crosshair. A long
-      // press, or a hold that moves, leaves it up. A cancelled touch (pointercancel) never hides it.
-      if (dr.hideOnTap && !dr.moved && e.type !== "pointercancel") {
-        this.hover = null;
-        this.emit("hover", null);
-      }
+      // The crosshair lasts as long as the finger is down. Lifting the finger removes it and offers a line or an
+      // alert at the price it was on. A cancelled touch only removes it.
+      this.hover = null;
+      this.emit("hover", null);
+      if (e.type !== "pointercancel") this._crossMenu(e.clientX, e.clientY, clamp(x, 0, this.plotW), clamp(y, 0, this.mainH));
       this.dirty();
       return;
     }
@@ -1027,7 +1004,7 @@ export class ChartEngine {
 
   onLeave(e) {
     if (this.drag) return;
-    // touch screens fire pointerleave when the finger lifts; a long-press crosshair stays up until the next tap
+    // touch screens fire pointerleave as the finger lifts; lifting already removes the crosshair (onUp)
     if (e && e.pointerType === "touch") return;
     this.hover = null;
     this.emit("hover", null);
@@ -1044,10 +1021,7 @@ export class ChartEngine {
       const f = Math.exp(e.deltaY * 0.0015);
       const a = this._f(this.pmin);
       const b = this._f(this.pmax);
-      const mid = (a + b) / 2;
-      const half = ((b - a) / 2) * f;
-      this.pmin = this._fi(mid - half);
-      this.pmax = this._fi(mid + half);
+      this._setY((a + b) / 2, (b - a) * f);
       this.dirty();
       return;
     }
@@ -1145,6 +1119,18 @@ export class ChartEngine {
     this.emit("view", this.viewState());
   }
 
+  /** Set the visible price range from its middle and its span, both on the price scale (log or linear). The span is
+   *  kept between a sliver of the price (0.2%) and about twenty times it. Without that limit a few pixels of finger
+   *  movement can stretch the axis into numbers like 10^25, which is how the right-hand scale blew up. */
+  _setY(mid, span) {
+    if (!Number.isFinite(mid) || !Number.isFinite(span)) return;     // leave the scale as it was
+    const log = !!this.opts.logScale;
+    const ref = log ? 1 : Math.abs(mid) || 1;                       // linear: measure the span against the price
+    const s = clamp(span / ref, 0.002, log ? 3 : 2) * ref;
+    this.pmin = this._fi(mid - s / 2);
+    this.pmax = this._fi(mid + s / 2);
+  }
+
   // Scale the price axis around its middle. Same sense as zoom(): f > 1 zooms in (a narrower price range).
   zoomY(f) {
     if (!this.d.length) return;
@@ -1152,10 +1138,7 @@ export class ChartEngine {
     this.auto = false;
     const a = this._f(this.pmin);
     const b = this._f(this.pmax);
-    const mid = (a + b) / 2;
-    const half = (b - a) / 2 / f;
-    this.pmin = this._fi(mid - half);
-    this.pmax = this._fi(mid + half);
+    this._setY((a + b) / 2, (b - a) / f);
     this.dirty();
     this.emit("view", this.viewState());
   }
