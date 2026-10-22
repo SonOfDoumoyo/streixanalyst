@@ -48,8 +48,16 @@ def check_build_version(brain):
     return built_with
 
 
+BUNDLED_BRAIN = Path(__file__).resolve().parent.parent.parent / "models" / "guru_brain.joblib"
+
+
 def load_brain(path=None):
     path = Path(path or settings.brain_path)
+    if not path.exists() and path != BUNDLED_BRAIN and BUNDLED_BRAIN.exists():
+        # no uploaded brain (Render's free plan has no disk, so uploads vanish when the service sleeps or redeploys):
+        # use the one committed with the code in backend/models/
+        path = BUNDLED_BRAIN
+    BRAIN["path"] = str(path)
     if not path.exists():
         BRAIN.update(brain=gm.FallbackBrain(), status="untrained",
                      detail=f"No trained brain at {path}. Probabilities are random-walk approximations until you "
