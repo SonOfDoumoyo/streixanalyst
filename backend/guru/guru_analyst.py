@@ -21,6 +21,8 @@ import pandas as pd
 import guru_levels as gl
 import guru_model as gm
 import market_data as md
+import playbook as pb
+import strategies as st
 import structure_engine as se
 
 BARS = {"1m": 1500, "5m": 1500, "15m": 1500, "30m": 1500, "1h": 1500, "4h": 1500, "1D": 1500, "3D": 800,
@@ -264,6 +266,7 @@ def _targets(clusters, entry, sl, d, atr, extra=()):
     cands = [(c["price"], " + ".join(c["labels"][:2])) for c in clusters
              if d * (c["price"] - entry) > 0.3 * risk and d * c.get("polarity", 0) <= 0]
     cands += [(p, lab) for p, lab in extra if p is not None and d * (p - entry) > 0.3 * risk]
+    cands = [(p, lab) for p, lab in cands if p > 0]                    # never a target below zero
     cands.sort(key=lambda x: d * (x[0] - entry))
     tps = []
     for need, max_atr, fallback in ((1.0, 8.0, 1.5), (2.0, 10.0, 2.0), (3.0, 14.0, None)):
@@ -278,7 +281,7 @@ def _targets(clusters, entry, sl, d, atr, extra=()):
             r_ = max(fallback, d * (last - entry) / risk + 0.75)
             if r_ * risk <= max_atr * atr:
                 pick = (entry + d * r_ * risk, f"{r_:.1f}R (no level closer)")
-        if pick is not None:
+        if pick is not None and pick[0] > 0:
             tps.append(pick)
     return tps
 
@@ -300,11 +303,18 @@ def _plan(side, kind, setup, entry, sl, tps, why, invalid, expiry, family=None, 
 
 
 def make_plans(X):
-    """Trade plans for both directions. Stops are widened to ≥ 0.5 ATR and ≥ 8× round-trip costs; if costs make that
-    impossible (e.g. 1m charts), the unwidened plans are kept and flagged, so EP/SL/TP are always stated."""
-    raw = _candidate_plans(X)
+    """Trade plans for both directions, from the chosen strategies only (all of the analyst's own setups when none
+    were chosen). Stops are widened to ≥ 0.5 ATR and ≥ 8× round-trip costs, then moved past nearby liquidity (the
+    liquidity guard); if costs make that impossible (e.g. 1m charts), the unwidened plans are kept and flagged, so
+    EP/SL/TP are always stated."""
+    ids = X.get("chosen")
+    raw = pb.tag(_candidate_plans(X))
     if not raw:
-        raw = _candidate_plans(X, max_trig_atr=60.0)
+        raw = pb.tag(_candidate_plans(X, max_trig_atr=60.0))
+    if ids:
+        raw = [p for p in raw if p.get("strategy") in ids]
+        have = {p["strategy"] for p in raw}
+        raw += [p for p in pb.rule_plans(X, ids) if p["strategy"] not in have or p.get("signal_age", 9) <= 1]
     out = _finalize_plans(raw, X)
     if not out:
         X["notes"].append("costs are too large relative to normal stops on this timeframe: plans shown with tight "
@@ -461,10 +471,13 @@ def _finalize_plans(plans, X, widen=True):
             q = _plan(p["side"], p["type"], p["setup"], p["entry"], sl,
                       _targets(clusters, p["entry"], sl, d, atr, extra=list(zip(p["tps"], p["tp_labels"]))),
                       p["why"] + [f"stop widened to {min_risk / atr:.2f} ATR so noise and costs don't decide the trade"],
-                      p["invalidation"], p["expiry"], p.get("family"), {k: p[k] for k in ("zone",) if k in p})
+                      p["invalidation"], p["expiry"], p.get("family"),
+                      {k: p[k] for k in ("zone", "strategy", "strategy_name", "signal_age") if k in p})
             if q is None:
                 continue
             p = q
+        if X.get("sctx") is not None:
+            p = pb.guard(p, X)
         out.append(p)
     return out
 
@@ -698,10 +711,12 @@ def analyze_user_drawings(items, X, brain):
 
 # ───────────────────────────── main ─────────────────────────────
 def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_drawings=None, brain=None,
-            leverage=None, now=None, show_bars=SHOW_BARS, data=None, asof=None):
+            leverage=None, now=None, show_bars=SHOW_BARS, data=None, asof=None, strategies=None):
     """Full analysis of `symbol` on timeframe `tf` (1m 5m 15m 30m 1h 4h 1D 3D 1W 1M).
     `asof` (a replay): the analysis is run as it would have been at that moment. Every candle it reads, on every
-    timeframe, had closed by then, and the clock is that moment."""
+    timeframe, had closed by then, and the clock is that moment.
+    `strategies` (catalog ids from strategies.py): the analysis uses only these strategies' setups and draws what
+    they use. None = the analyst's own mix of setups."""
     t_start = time.time()
     brain = brain or _STATE["brain"] or gm.FallbackBrain()
     tf = md.norm_tf(tf)
@@ -857,6 +872,14 @@ def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_draw
         c["reaction"] = reaction_stats(brain, X["asset_class"], tf, typ) if typ else None
     X["clusters"] = clusters
     X["user"], _ = analyze_user_drawings(user_drawings, X, brain)
+    # ── strategies: the chosen ones, their record here, the liquidity guard's sweep depth, the timeframe table
+    X["chosen"] = pb.chosen(strategies)
+    X["sctx"] = st.Ctx(dfe, tf, A, C["asset_class"])
+    X["depth"] = X["sctx"].sweep_depth()
+    X["records"] = pb.records(X, X["chosen"])
+    X["mtf"] = _safe(lambda: pb.mtf(X, symbol, HT, asof, X["chosen"]), dict(rows=[], alignment=0.0, text=""), notes,
+                     "timeframe table")
+    X["mtf_alignment"] = X["mtf"].get("alignment", 0.0)
     # ── probabilities
     pdir = brain.direction(row)
     rng = brain.expected_range(row, 0.15)
@@ -876,6 +899,7 @@ def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_draw
         key = p["side"]
         j = min(1, len(p["ev"]) - 1)
         val = p["score"] + 4 * float(np.clip(p["ev"][j], -0.5, 0.5)) * max(0.3, p["p_fill"])
+        val += pb.rank_bonus(p, X)
         p["rank"] = val
         if key not in best or val > best[key]["rank"]:
             best[key] = p
@@ -885,7 +909,10 @@ def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_draw
     for p in plans:
         p["sizing"] = size_position(p, X, account, risk_pct, leverage)
     X["plans"], X["primary"], X["alternative"] = plans, primary, alternative
-    X["verdict"] = _verdict(primary, X)
+    X["conflict"] = pb.conflict(plans, X)
+    X["fixed_time"] = _safe(lambda: pb.fixed_time(X, X["chosen"]), None, notes, "fixed-time view")
+    X["verdict"] = pb.soften(_verdict(primary, X), primary, X, pb.confidence(primary, X), X["conflict"])
+    X["liq_map"] = _safe(lambda: pb.liquidity_map(X), None, notes, "liquidity map")
     X["skill"] = model_skill(brain)
     X["notes"] = notes
     result = dict(
@@ -903,8 +930,11 @@ def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_draw
         patterns=[{k_: v for k_, v in q.items() if k_ not in ("support", "resistance")} for q in X["patterns"]],
         divergences=X["divs"], session=X["session"], period_levels=X["period"], rsi=X["rsi"],
         probabilities=X["prob"], model=X["skill"], user_drawings=X["user"], notes=notes,
+        strategies=_strategies_block(X), mtf=X["mtf"], fixed_time=X["fixed_time"], liquidity=X["liq_map"],
+        how_to_enter=pb.how_to_enter(primary, X), layers_scope=st.layers_for(X["chosen"]) if X["chosen"] else None,
         disclaimer="Research tool, not financial advice. Probabilities are calibrated estimates from history; "
-                   "markets change. Paper-trade first and never risk money you can't afford to lose.")
+                   "markets change. Analysis may differ on other timeframes and changes with every new candle. "
+                   "Paper-trade first and never risk money you can't afford to lose.")
     result["report_pro"] = report(X, beginner=False)
     result["report_beginner"] = report(X, beginner=True)
     result["report"] = result["report_beginner"] if mode == "beginner" else result["report_pro"]
@@ -941,12 +971,44 @@ def jsonable(x):
     return x
 
 
+def _strategies_block(X):
+    """The chosen strategies: what each says now, and its record on the loaded candles."""
+    ids = X.get("chosen")
+    if not ids:
+        return dict(mode="auto", chosen=[], items=[], note="The analyst's own mix of setups (no strategy chosen).")
+    items = []
+    for sid in ids:
+        s = st.BY_ID[sid]
+        rec = (X.get("records") or {}).get(sid) or {}
+        lv = (X.get("live") or {}).get(sid) or st.live(X["sctx"], sid, price=X["price"])
+        plan = next((p for p in X.get("plans") or [] if p.get("strategy") == sid), None)
+        items.append(dict(id=sid, name=s["name"], group=s["group"], fixed_time=s["fixed_time"],
+                          signal=lv.get("signal"), age=lv.get("age"), last=lv.get("last"), missed=lv.get("missed"),
+                          wait_for=s["wait_for"], best_for=s["best_for"], record=rec.get("record"),
+                          score=rec.get("score", 0.0), has_plan=plan is not None,
+                          suits_tf=X["tf"] in s["timeframes"], suits_market=_market_key(X) in s["markets"]))
+    return dict(mode="chosen", chosen=ids, items=items, conflict=X.get("conflict"))
+
+
+def _market_key(X):
+    ac = X.get("asset_class") or ""
+    sub = (X["C"].get("sub") or "") if X.get("C") is not None else ""
+    if sub.startswith("fx"):
+        return "fx"
+    if sub in ("gold", "silver", "metal"):
+        return "gold"
+    if ac in ("crypto", "stock", "index"):
+        return ac
+    return "fx" if ac == "fx" else ac
+
+
 def _public_plan(p, f):
     if p is None:
         return None
     keep = ("side", "type", "setup", "family", "entry", "sl", "tps", "tp_labels", "rr", "p_fill", "p_tp", "p_sl",
             "p_open", "breakeven", "ev", "cost_r", "risk_atr", "chase_limit", "score", "grade", "hist_grade",
-            "evidence", "checklist", "why", "invalidation", "expiry", "sizing", "zone")
+            "evidence", "checklist", "why", "invalidation", "expiry", "sizing", "zone", "strategy", "strategy_name",
+            "signal_age", "liquidity_guard", "sweep_first")
     out = {k: p.get(k) for k in keep}
     out["text"] = (f"{'BUY' if p['dir'] == 1 else 'SELL'} {p['type'].upper()} EP {f.p(p['entry'])} | SL {f.p(p['sl'])} | "
                    + " | ".join(f"TP{i + 1} {f.p(t)}" for i, t in enumerate(p["tps"])))
@@ -1441,6 +1503,129 @@ def _advice(X):
 
 
 # ───────────────────────────── drawings for the chart / web app ─────────────────────────────
+CANDLE_WHY = {
+    "Hammer": "A small body near the top with a long lower wick after a fall: sellers pushed down and buyers pushed back.",
+    "Inverted Hammer": "A long upper wick after a fall: buyers tried to lift price; a bullish candle next confirms it.",
+    "Bullish Engulfing": "A green body that covers the whole previous red body: buyers took over.",
+    "Bearish Engulfing": "A red body that covers the whole previous green body: sellers took over.",
+    "Bullish Harami": "A small green body inside the previous red one: the selling is pausing.",
+    "Bearish Harami": "A small red body inside the previous green one: the buying is pausing.",
+    "Piercing Line": "A green candle that closes above the middle of the previous red one: buyers fighting back.",
+    "Dark Cloud Cover": "A red candle that closes below the middle of the previous green one: sellers fighting back.",
+    "Morning Star": "Red, small, then a strong green candle: a three-candle bottoming pattern.",
+    "Evening Star": "Green, small, then a strong red candle: a three-candle topping pattern.",
+    "Three White Soldiers": "Three strong green candles in a row: steady buying.",
+    "Three Black Crows": "Three strong red candles in a row: steady selling.",
+    "Bullish Marubozu": "A green candle with almost no wicks: buyers in control the whole candle.",
+    "Bearish Marubozu": "A red candle with almost no wicks: sellers in control the whole candle.",
+    "Tweezer Bottom": "Two candles with the same low: that price was defended twice.",
+    "Tweezer Top": "Two candles with the same high: that price was rejected twice.",
+    "Hanging Man": "A hammer shape after a rise: a warning that sellers are stepping in.",
+    "Shooting Star": "A long upper wick after a rise: buyers were rejected at the high.",
+    "Doji": "Open and close almost equal: indecision.",
+    "Inside Bar": "A candle inside the previous one's range: a pause before the next move.",
+}
+
+
+def _why_swing(s, sw, k, f):
+    lab = s["label"]
+    prev = [q for q in sw[:k] if q["type"] == s["type"]]
+    before = f" than the previous swing {s['type']} at {f.p(prev[-1]['price'])}" if prev else ""
+    meaning = {"HH": "Higher high: buyers pushed past the last high. Higher highs with higher lows make an uptrend.",
+               "HL": "Higher low: sellers couldn't reach the last low. In an uptrend, higher lows are where buyers step in.",
+               "LH": "Lower high: buyers couldn't reach the last high. Lower highs with lower lows make a downtrend.",
+               "LL": "Lower low: sellers pushed past the last low.",
+               "H": "The first swing high on the chart.", "L": "The first swing low on the chart."}.get(lab, "")
+    word = {"HH": "higher", "HL": "higher", "LH": "lower", "LL": "lower"}.get(lab)
+    return (f"A swing {s['type']} at {f.p(s['price'])}" + (f", {word}{before}" if word else "") + ". " + meaning)
+
+
+def _why_event(e, d_, f, tf):
+    up = e["direction"] == "bullish"
+    when = d_.index[e["idx"]]
+    base = (f"On the {tf} candle of {when:%d %b %H:%M} UTC, price closed {'above' if up else 'below'} the swing "
+            f"{'high' if up else 'low'} at {f.p(e['level'])}.")
+    if e["kind"] == "CHoCH":
+        return (base + f" That was the first break against the {'down' if up else 'up'}trend: a change of character "
+                       f"(CHoCH), an early sign the trend may be turning {'up' if up else 'down'}. It needs "
+                       f"follow-through (a higher low and a BOS) to confirm.")
+    return (base + f" It broke structure in the trend's direction (BOS): the {'up' if up else 'down'}trend continues "
+                   f"while price stays {'above' if up else 'below'} the last {'higher low' if up else 'lower high'}.")
+
+
+def _why_pattern(q, f):
+    name = q["name"]
+    low = name.lower()
+    pts = ", ".join(f.p(x) for x in q.get("prices", [])[:5])
+    if "double top" in low:
+        core = "Two highs at about the same price with a dip between: buyers failed twice at the same place."
+    elif "double bottom" in low:
+        core = "Two lows at about the same price with a bounce between: sellers failed twice at the same place."
+    elif "head" in low and "inverse" in low:
+        core = "A low, a lower low (the head), then a higher low: selling pressure is weakening."
+    elif "head" in low:
+        core = "A high, a higher high (the head), then a lower high: buying pressure is weakening."
+    elif "triangle" in low or "wedge" in low:
+        core = "Price is squeezing between two converging lines; the breakout direction usually sets the next move."
+    else:
+        core = f"A {q.get('bias_word', '')} chart pattern."
+    tgt = q.get("target_up") if q.get("bias", 0) == 1 else q.get("target_down")
+    return (f"{core} Points: {pts}. It confirms on a close beyond {f.p(q['trigger'])}"
+            + (f"; the measured move points to {f.p(tgt)}" if tgt else "") + ".")
+
+
+def _why_target(label, p_tp):
+    odds = "" if p_tp is None else f" Odds of reaching it before the stop: about {round(p_tp * 100)}%."
+    if "no level closer" in label:
+        return f"No level sits closer, so this target is a fixed {label.split(' ')[0]} of the risk.{odds}"
+    if label.endswith(" target"):
+        return f"The strategy's own target ({label[:-7]}).{odds}"
+    return (f"Set just before {label}: a level the other side defends or where liquidity rests, placed a touch early "
+            f"so it fills when the level is tagged.{odds}")
+
+
+def _segments(xs, vals):
+    """Split a series with gaps (NaN) into continuous runs of [x, y] points."""
+    out, cur = [], []
+    for x, v in zip(xs, vals):
+        if v is None or not np.isfinite(v):
+            if len(cur) > 1:
+                out.append(cur)
+            cur = []
+        else:
+            cur.append([int(x), float(v)])
+    if len(cur) > 1:
+        out.append(cur)
+    return out
+
+
+def _strategy_overlay(X, add, tx, s0, n):
+    """For the chosen strategies: their indicator lines and their past trades on the visible candles."""
+    ids = X.get("chosen")
+    ctx = X.get("sctx")
+    if not ids or ctx is None:
+        return
+    for key, (label, color, vals) in st.indicator_lines(ctx, ids, s0).items():
+        xs = list(range(len(vals)))
+        for seg in _segments(xs, vals):
+            add("indicators", "path", 0, 2, points=seg, color=color, width=1.2, text=None, title=label,
+                why=f"{label}: used by your strategy " + ", ".join(st.BY_ID[i]["name"] for i in ids
+                                                                    if any(k in st.BY_ID[i]["indicators"] for k in
+                                                                           (key, key.split("_")[0], key[:2])))
+                + ".")
+    for sid in ids[:3]:
+        rec = (X.get("records") or {}).get(sid)
+        if not rec:
+            continue
+        for m in st.markers(ctx, sid, rec["trades"][-40:], show_from=s0):
+            if m["kind"] == "marker":
+                add("strategy", "marker", 16, 2, x1=tx(m["i"]), y1=m["price"], symbol=m["symbol"], color=m["color"],
+                    text=m["text"], title=m["text"], why=m["why"])
+            else:
+                add("strategy", "line", 16, 2, x1=tx(m["i1"]), x2=tx(m["i2"]), y1=m["p1"], y2=m["p2"], color=m["color"],
+                    dash="dot", width=1.1, text=m["text"], label_at="end", title=m["text"], why=m["why"])
+
+
 def chart_data(X, show_bars=SHOW_BARS):
     """Candles + drawing instructions (JSON-friendly) for the chart / web app.
     x = candle index in `candles` (the forming candle, if any, is the last one), t = epoch seconds.
@@ -1478,70 +1663,116 @@ def chart_data(X, show_bars=SHOW_BARS):
 
     sw = [s for s in A["swings"] if s["idx"] >= s0]
     if len(sw) >= 2:
-        add("structure", "path", 1, 1, points=[[tx(s["idx"]), float(s["price"])] for s in sw], color=COL["zig"], width=1)
+        add("structure", "path", 1, 1, points=[[tx(s["idx"]), float(s["price"])] for s in sw], color=COL["zig"], width=1,
+            title="Swing path", why="The zigzag joins the confirmed swing highs and lows (a swing high has 3 lower highs on "
+                                   "each side). Its shape is the market structure: higher highs and higher lows are an "
+                                   "uptrend, lower highs and lower lows a downtrend.")
     for k, s in enumerate(sw):
         col = COL["up"] if s["label"] in ("HH", "HL") else COL["down"] if s["label"] in ("LH", "LL") else COL["text"]
         add("structure", "label", 2, 1 if k >= len(sw) - 8 else 3, x1=tx(s["idx"]), y1=float(s["price"]),
-            text=s["label"], color=col, anchor="above" if s["type"] == "high" else "below")
+            text=s["label"], color=col, anchor="above" if s["type"] == "high" else "below",
+            title=f"{s['label']} at {f.p(s['price'])}", why=_why_swing(s, sw, k, f))
     evs = [e for e in A["events"] if e["idx"] >= s0]
     for k, e in enumerate(evs):
         col = COL["choch"] if e["kind"] == "CHoCH" else (COL["up"] if e["direction"] == "bullish" else COL["down"])
         add("structure", "line", 3, 1 if k >= len(evs) - 4 else 3, x1=tx(e["from_idx"]), x2=tx(e["idx"]),
             y1=e["level"], y2=e["level"], color=col, dash="dash" if e["kind"] == "BOS" else "dot", width=1.3,
-            text=e["kind"], label_at="middle", anchor="above" if e["direction"] == "bullish" else "below")
+            text=e["kind"], label_at="middle", anchor="above" if e["direction"] == "bullish" else "below",
+            title=f"{e['kind']} {'up' if e['direction'] == 'bullish' else 'down'} at {f.p(e['level'])}",
+            why=_why_event(e, d_, f, X["tf"]))
     for side in ("support", "resistance"):
         zs = sorted([z for z in A["zones"] if z["role"] in (side, "at zone") and vis(z["bottom"], z["top"])],
                     key=lambda z: abs((z["top"] + z["bottom"]) / 2 - price))
         for k, z in enumerate(zs[:3]):
             fill = COL["sup"] if z["role"] == "support" else COL["res"] if z["role"] == "resistance" else COL["mid"]
             add("zones", "box", 4, 2 if k < 2 else 3, x1=tx(z["first_idx"]), x2=right, y1=z["bottom"], y2=z["top"],
-                fill=fill, text=f"{z['role'].capitalize()} ×{z['touches']}", extend="right")
+                fill=fill, text=f"{z['role'].capitalize()} ×{z['touches']}", extend="right",
+                title=f"{z['role'].capitalize()} zone {f.p(z['bottom'])}–{f.p(z['top'])}",
+                why=f"Price turned here {z['touches']} times (swing highs and lows clustered within 0.6 ATR). The more "
+                    f"often a level held, the more traders watch it; it is {'support' if z['role'] == 'support' else 'resistance' if z['role'] == 'resistance' else 'where price is now'}. "
+                    f"A close through it with momentum usually flips its role.")
     for k, ob in enumerate([o for o in X["obs"] if vis(o["bottom"], o["top"])]):
         bull = ob["role"] == "demand"
         add("orderblocks", "box", 5, 3 if ob["status"] == "breaker" or k >= 3 else 2, x1=tx(ob["idx"]), x2=right,
             y1=ob["bottom"], y2=ob["top"], fill=COL["ob_bull"] if bull else COL["ob_bear"], extend="right",
-            text=("Breaker" if ob["status"] == "breaker" else "OB") + (" ▲" if bull else " ▼"))
+            text=("Breaker" if ob["status"] == "breaker" else "OB") + (" ▲" if bull else " ▼"),
+            title=("Breaker block" if ob["status"] == "breaker" else "Order block") + (" (bullish)" if bull else " (bearish)"),
+            why=(f"The last {'down' if bull else 'up'} candle before the move that broke structure "
+                 f"{'up' if bull else 'down'} ({f.p(ob['bottom'])}–{f.p(ob['top'])}). Big orders filled here; when "
+                 f"price returns, the rest of those orders often defend it, so it acts as "
+                 f"{'demand' if bull else 'supply'}." if ob["status"] != "breaker" else
+                 f"An order block price closed through. Failed blocks often flip: this one now acts as "
+                 f"{'demand' if bull else 'supply'} from the other side."))
     gaps = sorted([g for g in A["fvgs"] if g["filled_idx"] is None and vis(g["bottom"], g["top"])],
                   key=lambda g: abs((g["top"] + g["bottom"]) / 2 - price))
     for k, g in enumerate(gaps[:5]):
         add("fvg", "box", 6, 2 if k < 3 else 3, x1=tx(g["idx"]), x2=right, y1=g["bottom"], y2=g["top"],
-            fill=COL["fvg_bull"] if g["direction"] == "bullish" else COL["fvg_bear"], text="FVG", extend="right")
+            fill=COL["fvg_bull"] if g["direction"] == "bullish" else COL["fvg_bear"], text="FVG", extend="right",
+            title=f"{g['direction'].capitalize()} fair value gap {f.p(g['bottom'])}–{f.p(g['top'])}",
+            why=f"Three candles where the first and third don't overlap: price moved so fast "
+                f"{'up' if g['direction'] == 'bullish' else 'down'} that only one side traded. Markets often come back "
+                f"to fill part of such gaps, and they often act as {'support' if g['direction'] == 'bullish' else 'resistance'} "
+                f"when they do. It is still open (not filled).")
     liq = A["liquidity"]
     for tag, lvls in (("BSL", liq["buy_side"][:3]), ("SSL", liq["sell_side"][:3])):
         for k, s in enumerate(lvls):
             if vis(s["price"]):
                 add("liquidity", "line", 7, 1 if k == 0 else 2, x1=tx(s["idx"]), x2=right, y1=s["price"],
-                    y2=s["price"], color=COL["liq"], dash="dashdot", width=1, text=tag, extend="right")
+                    y2=s["price"], color=COL["liq"], dash="dashdot", width=1, text=tag, extend="right",
+                    title=f"{'Buy' if tag == 'BSL' else 'Sell'}-side liquidity {f.p(s['price'])}",
+                    why=(f"An untaken swing {'high' if tag == 'BSL' else 'low'}. Traders put stop orders just "
+                         f"{'above' if tag == 'BSL' else 'below'} swings, and breakout orders too, so a pool of orders "
+                         f"rests here. Price is often drawn to it, and a wick through it that closes back is a sweep "
+                         f"(stops taken). Stops placed just beyond such a level are the ones that get hunted."))
     for pl in liq["pools"]:
         if not pl["taken"] and pl["idx_a"] >= s0 and vis(pl["level"]):
             add("liquidity", "line", 7, 2, x1=tx(pl["idx_a"]), x2=tx(pl["idx_b"]), y1=pl["level"], y2=pl["level"],
-                color=COL["liq"], dash="dot", width=1, text=pl["kind"], label_at="end")
+                color=COL["liq"], dash="dot", width=1, text=pl["kind"], label_at="end",
+                title=f"{'Equal highs' if pl['kind'] == 'EQH' else 'Equal lows'} {f.p(pl['level'])}",
+                why=f"Two swing {'highs' if pl['kind'] == 'EQH' else 'lows'} at almost the same price (within 0.15 ATR). "
+                    f"They look like strong {'resistance' if pl['kind'] == 'EQH' else 'support'}, so many stops sit "
+                    f"just {'above' if pl['kind'] == 'EQH' else 'below'}: one of the most obvious liquidity pools. "
+                    f"Smart-money traders expect it to be taken before a real move the other way.")
     for k, s in enumerate([s for s in A["sweeps"] if s["idx"] >= s0][-6:][::-1]):
         add("liquidity", "marker", 8, 2 if k < 3 else 3, x1=tx(s["idx"]), y1=s["wick"], symbol="x", color=COL["liq"],
-            text=f"{s['side']} liquidity swept")
+            text=f"{s['side']} liquidity swept", title=f"{s['side'].capitalize()} sweep",
+            why=f"A wick went {abs(s['wick'] - s['level']) / max(atr, 1e-12):.2f} ATR past the swing at {f.p(s['level'])} "
+                f"and the candle closed back inside: the stops there were taken (a stop hunt), then price turned. "
+                f"After a sweep, a break of structure the other way is the classic ICT reversal entry.")
     P = X["period"]
     for k, lab in (("pdh", "PDH"), ("pdl", "PDL"), ("pwh", "PWH"), ("pwl", "PWL"), ("pmh", "PMH"), ("pml", "PML")):
         if P.get(k) is not None and vis(P[k]) and (X["intraday"] or k[1] in "wm"):
             add("period", "hline", 9, 2, x1=0, x2=right, y1=P[k], y2=P[k], color=COL["period"], dash="dot", width=1,
-                text=lab, extend="right")
+                text=lab, extend="right", title=f"{lab} {f.p(P[k])}",
+                why=f"The previous {'day' if k[1] == 'd' else 'week' if k[1] == 'w' else 'month'}'s "
+                    f"{'high' if k[2] == 'h' else 'low'}. Every trader sees it, so stops and orders gather there: a "
+                    f"key liquidity level and a common target or turning point.")
     for r_ in X["rounds"]:
         if vis(r_["price"]):
             add("round", "hline", 9, 3, x1=0, x2=right, y1=r_["price"], y2=r_["price"], color=COL["round"],
-                dash="dot", width=0.8, text=f.p(r_["price"]), extend="right")
+                dash="dot", width=0.8, text=f.p(r_["price"]), extend="right", title=f"Round number {f.p(r_['price'])}",
+                why="A psychological round number. People place orders at round prices, so price often reacts there.")
     S_ = X["session"]
     if S_.get("asia") and S_["asia"]["i1"] >= s0:
         a_ = S_["asia"]
         add("session", "box", 10, 2, x1=tx(a_["i1"]), x2=tx(a_["i2"]), y1=a_["low"], y2=a_["high"],
-            fill="rgba(144,202,249,0.08)", text="Asia", label_at="start")
+            fill="rgba(144,202,249,0.08)", text="Asia", label_at="start", title="Asian range",
+            why=f"The Asian session's range ({f.p(a_['low'])}–{f.p(a_['high'])}, 20:00–24:00 New York). London often "
+                f"sweeps one side of it before the day's real move (the Power of 3: accumulation, manipulation, "
+                f"distribution).")
     for L_ in X["lines"]:
         x1 = tx(L_["i1"])
         y1 = L_["p1"] + L_["slope"] * (s0 + x1 - L_["i1"]) if L_["i1"] < s0 else L_["p1"]
         y2 = L_["p1"] + L_["slope"] * (s0 + right - L_["i1"])
         add("trendlines", "line", 11, 2, x1=x1, x2=right, y1=float(y1), y2=float(y2), color=COL["trend"], width=1.4,
-            text=L_["name"])
+            text=L_["name"], title=L_["name"].capitalize(),
+            why=f"A line through {L_.get('touches', 'several')} swing points that price respected. Until a candle closes "
+                f"through it, it is likely to act as {'support' if 'up' in L_['name'].lower() else 'resistance'}.")
         if "channel_offset" in L_:
             add("trendlines", "line", 11, 3, x1=x1, x2=right, y1=float(y1 + L_["channel_offset"]),
-                y2=float(y2 + L_["channel_offset"]), color=COL["trend"], width=1, dash="dash", text="channel")
+                y2=float(y2 + L_["channel_offset"]), color=COL["trend"], width=1, dash="dash", text="channel",
+                title="Channel line", why="The parallel line on the other side of the trendline: price has been moving "
+                                          "between the two. Its edge is a natural place to take profit.")
     for q in X["patterns"]:
         if q["kind"] == "lines":
             for side in ("support", "resistance"):
@@ -1550,42 +1781,69 @@ def chart_data(X, show_bars=SHOW_BARS):
                 gi = s0 + x1
                 add("patterns", "line", 12, 2, x1=x1, x2=last_x, y1=float(Lq["p1"] + Lq["slope"] * (gi - Lq["i1"])),
                     y2=float(Lq["p1"] + Lq["slope"] * (n - 1 - Lq["i1"])), color=COL["pattern"], width=1.4,
-                    text=q["name"] if side == "resistance" else None, label_at="start")
+                    text=q["name"] if side == "resistance" else None, label_at="start",
+                    title=f"{q['name']} ({side})", why=_why_pattern(q, f) if q.get("trigger") is not None else
+                    f"The {side} line of a {q['name'].lower()}: price is squeezing between two lines. A close through "
+                    f"either line usually starts the next move in that direction.")
         else:
             pts = [[tx(i), float(pp)] for i, pp in zip(q["points"], q["prices"])]
-            add("patterns", "path", 12, 2, points=pts, color=COL["pattern"], width=1.2, dash="dot", text=q["name"])
+            add("patterns", "path", 12, 2, points=pts, color=COL["pattern"], width=1.2, dash="dot", text=q["name"],
+                title=q["name"], why=_why_pattern(q, f))
             add("patterns", "hline", 12, 2, x1=pts[0][0], x2=right, y1=q["trigger"], y2=q["trigger"],
-                color=COL["pattern"], dash="dash", width=1, text=f"{q['name']} trigger")
+                color=COL["pattern"], dash="dash", width=1, text=f"{q['name']} trigger",
+                title=f"{q['name']} trigger {f.p(q['trigger'])}",
+                why=f"The {q['name'].lower()} only counts once a candle closes beyond {f.p(q['trigger'])} (the neckline "
+                    f"or trigger). Before that it is a possible pattern, not a confirmed one.")
     leg = X["leg"]
     if leg is not None and leg["origin_idx"] >= s0:
         x1 = tx(min(leg["origin_idx"], leg["extreme_idx"]))
         for r_, v in leg["retracements"].items():
             if r_ in ("0.5", "0.618", "0.705", "0.786"):
                 add("fib", "line", 13, 3, x1=x1, x2=right, y1=v, y2=v, color=COL["fib"], width=0.8, dash="dot",
-                    text=f"{float(r_) * 100:.1f}%".replace(".0%", "%"))
+                    text=f"{float(r_) * 100:.1f}%".replace(".0%", "%"), title=f"Fibonacci {float(r_) * 100:.1f}%",
+                    why=f"The {float(r_) * 100:.1f}% retracement of the last impulse leg. Pullbacks often pause at 50–78.6% "
+                        f"before the trend resumes.")
         r = leg["retracements"]
         add("fib", "box", 13, 2, x1=x1, x2=right, y1=min(r["0.618"], r["0.786"]), y2=max(r["0.618"], r["0.786"]),
-            fill=COL["ote"], text="OTE")
+            fill=COL["ote"], text="OTE", title="Optimal trade entry (61.8–78.6%)",
+            why=f"The 61.8–78.6% retracement of the last impulse leg ({f.p(leg['origin'])} → {f.p(leg['extreme'])}). "
+                f"ICT's optimal trade entry: where traders who missed the move join the trend at a discount "
+                f"(premium for sells).")
     dr = X["dr"]
     if dr is not None:
         add("range", "hline", 14, 3, x1=tx(min(dr["top_idx"], dr["bottom_idx"])), x2=right, y1=dr["eq"], y2=dr["eq"],
-            color="rgba(209,212,220,0.5)", dash="dash", width=0.8, text="EQ 50%")
+            color="rgba(209,212,220,0.5)", dash="dash", width=0.8, text="EQ 50%", title="Equilibrium (50%)",
+            why=f"The middle of the dealing range {f.p(dr['bottom'])}–{f.p(dr['top'])}. Above it is premium (expensive: "
+                f"look to sell), below it discount (cheap: look to buy).")
     if X["vp"] is not None:
         for k, lab in (("poc", "POC"), ("vah", "VAH"), ("val", "VAL")):
             add("volume_profile", "hline", 15, 3, x1=tx(X["vp"]["start_idx"]), x2=right, y1=X["vp"][k],
-                y2=X["vp"][k], color=COL["poc"], dash="dot" if k != "poc" else None, width=0.8, text=lab)
-        add("volume_profile", "histogram", 15, 3, bins=X["vp"]["bins"], x_right=right, color="rgba(240,98,146,0.25)")
+                y2=X["vp"][k], color=COL["poc"], dash="dot" if k != "poc" else None, width=0.8, text=lab,
+                title={"poc": "Point of control", "vah": "Value area high", "val": "Value area low"}[k],
+                why={"poc": "The price with the most volume traded in the window: where buyers and sellers agreed most. "
+                            "Price is often pulled back to it.",
+                     "vah": "The top of the value area (where 70% of the volume traded). Above it price is 'expensive'.",
+                     "val": "The bottom of the value area. Below it price is 'cheap'."}[k])
+        add("volume_profile", "histogram", 15, 3, bins=X["vp"]["bins"], x_right=right, color="rgba(240,98,146,0.25)",
+            title="Volume profile", why="How much volume traded at each price over the window. Thick parts are prices "
+                                        "the market accepted; thin parts are where price moves quickly.")
     pats = [q for q in A["patterns"] if q["idx"] >= n - 30 and q["bias"] != "neutral"]
     for q in pats[-6:]:
         bull = q["bias"] == "bullish"
         i = q["idx"]
         y = float(d_["low"].iat[i] - 0.4 * atr) if bull else float(d_["high"].iat[i] + 0.4 * atr)
         add("candles", "marker", 16, 3 if i < n - 5 else 2, x1=tx(i), y1=y,
-            symbol="triangle-up" if bull else "triangle-down", color=COL["up"] if bull else COL["down"], text=q["name"])
+            symbol="triangle-up" if bull else "triangle-down", color=COL["up"] if bull else COL["down"], text=q["name"],
+            title=q["name"], why=CANDLE_WHY.get(q["name"], f"A {q['bias']} candle pattern.") + " On its own a candle "
+            "pattern is weak; it matters at a key level.")
     for dv in X["divs"]:
         if dv["i1"] >= s0:
             add("divergence", "line", 17, 2, x1=tx(dv["i1"]), x2=tx(dv["i2"]), y1=dv["p1"], y2=dv["p2"],
-                color=COL["up"] if dv["bias"] == 1 else COL["down"], width=1.6, text=dv["name"], label_at="end")
+                color=COL["up"] if dv["bias"] == 1 else COL["down"], width=1.6, text=dv["name"], label_at="end",
+                title=dv["name"],
+                why=f"Price made a {'lower low' if dv['bias'] == 1 else 'higher high'} but RSI didn't: momentum is "
+                    f"fading, an early warning the move may {'bottom' if dv['bias'] == 1 else 'top'}. It needs a "
+                    f"structure break to confirm.")
     for k, (pl, dim) in enumerate(((X["primary"], False), (X["alternative"], True))):
         if pl is None:
             continue
@@ -1597,15 +1855,29 @@ def chart_data(X, show_bars=SHOW_BARS):
         add("plan", "box", o, pr, x1=x1, x2=x2, y1=min(pl["entry"], pl["sl"]), y2=max(pl["entry"], pl["sl"]),
             fill="rgba(239,83,80,0.10)" if dim else "rgba(239,83,80,0.22)", plan=tag)
         pre = "" if not dim else "alt "
+        guard_txt = ""
+        if pl.get("liquidity_guard"):
+            g = pl["liquidity_guard"]
+            guard_txt = (f" It was moved past the liquidity at {f.p(g['pool'])} (from {f.p(g['moved_from'])}): stop hunts "
+                         f"here usually reach {g['depth_atr']:.2f} ATR past a swing.")
         add("plan", "line", o, pr, x1=x1, x2=x2, y1=pl["entry"], y2=pl["entry"], color=COL["text"], width=1.5,
-            text=f"{pre}EP {f.p(pl['entry'])}", label_at="plan", plan=tag)
+            text=f"{pre}EP {f.p(pl['entry'])}", label_at="plan", plan=tag, copy=f.p(pl["entry"]),
+            title=f"Entry {f.p(pl['entry'])} ({pl['type']})",
+            why=f"{pl['setup']}. " + "; ".join(pl["why"][:2]) + "."
+                + (" " + pl["sweep_first"]["note"] if pl.get("sweep_first") else ""))
         add("plan", "line", o, pr, x1=x1, x2=x2, y1=pl["sl"], y2=pl["sl"], color=COL["down"], width=1.5,
-            text=f"{pre}SL {f.p(pl['sl'])}", label_at="plan", plan=tag)
+            text=f"{pre}SL {f.p(pl['sl'])}", label_at="plan", plan=tag, copy=f.p(pl["sl"]),
+            title=f"Stop loss {f.p(pl['sl'])}",
+            why=f"The idea is wrong if price gets here ({pl['invalidation']}). {abs(pl['entry'] - pl['sl']) / atr:.2f} ATR "
+                f"from the entry.{guard_txt}")
         for i, t in enumerate(pl["tps"]):
             add("plan", "line", o, pr, x1=x1, x2=x2, y1=t, y2=t, color=COL["up"], width=1.2,
-                text=f"{pre}TP{i + 1} {f.p(t)}", label_at="plan", plan=tag)
+                text=f"{pre}TP{i + 1} {f.p(t)}", label_at="plan", plan=tag, copy=f.p(t),
+                title=f"Take profit {i + 1}: {f.p(t)} ({pl['rr'][i]:.1f}R)",
+                why=_why_target(pl["tp_labels"][i], pl["p_tp"][i] if pl.get("p_tp") else None))
     add("price", "hline", 20, 1, x1=0, x2=right, y1=price, y2=price, color=COL["text"], dash="dot", width=0.8,
         text=f.p(price), extend="right")
+    _strategy_overlay(X, add, tx, s0, n)
     for u in X["user"]:
         if u.get("type") in ("hline", "level") and "level" in u:
             add("user", "hline", 21, 1, x1=0, x2=right, y1=u["level"], y2=u["level"], color=COL["user"], width=1.2,

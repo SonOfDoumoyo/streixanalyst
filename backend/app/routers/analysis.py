@@ -21,6 +21,14 @@ class AnalyzeIn(BaseModel):
     leverage: float | None = Field(None, gt=0, le=200)
     mode: str | None = None
     drawings: list = Field(default_factory=list, max_length=60)
+    strategies: list[str] | None = Field(None, max_length=60)      # None: the person's saved choice
+
+
+class WhatIfIn(BaseModel):
+    symbol: str = Field(min_length=1, max_length=64)
+    tf: str = "1h"
+    price: float = Field(gt=0)
+    strategies: list[str] | None = Field(None, max_length=60)
 
 
 class ReviewIn(BaseModel):
@@ -55,6 +63,16 @@ def _clean_drawings(items):
     return out
 
 
+def strategies_for(user, ids=None):
+    """The strategies to analyse with: the ones sent with the request, else the person's saved choice, else None
+    (the analyst's own mix)."""
+    import strategies as st
+    from .strategies import user_strategies
+    if ids:
+        return st.clean_ids(ids) or None
+    return user_strategies(user)
+
+
 def learning_note(res):
     """What the analyst's own record says about calls like this one (services/selflearn.py), or None."""
     try:
@@ -70,7 +88,8 @@ def run(body: AnalyzeIn, user: User = Depends(verified_user), db: Session = Depe
     mode = _mode(user, body.mode)
     try:
         res = engine.analyze(body.symbol.strip(), body.tf, account=body.account, risk_pct=body.risk_pct, mode=mode,
-                             user_drawings=_clean_drawings(body.drawings), leverage=body.leverage)
+                             user_drawings=_clean_drawings(body.drawings), leverage=body.leverage,
+                             strategies=strategies_for(user, body.strategies))
     except engine.EngineError as e:
         refund(db, user, "analysis")
         raise HTTPException(422, str(e))
@@ -96,6 +115,21 @@ def run(body: AnalyzeIn, user: User = Depends(verified_user), db: Session = Depe
     # the person's own tendencies from their replays (chasing, re-entering after a loss, feelings): empty until enough
     res["tendencies"] = psychology.tips(psychology.features(psychology.decision_rows(psychology.replays_of(db, user.id, 300))))
     return res
+
+
+@router.post("/whatif")
+def whatif(body: WhatIfIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
+    """'Analyse from this point': if I buy or sell from this price on the latest candle, now, how would it look?"""
+    require_feature(user, "review")
+    consume(db, user, "review")
+    try:
+        return engine.whatif(body.symbol.strip(), body.tf, body.price, strategies=strategies_for(user, body.strategies))
+    except engine.EngineError as e:
+        refund(db, user, "review")
+        raise HTTPException(422, str(e))
+    except Exception as e:
+        refund(db, user, "review")
+        raise HTTPException(500, f"That check failed unexpectedly ({type(e).__name__}). Please try again.")
 
 
 @router.post("/review")

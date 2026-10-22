@@ -76,6 +76,12 @@ def _background():
                     selflearn.retrain(db)
             except Exception:
                 log.exception("self-learning retrain failed")
+        if i % 24 == 2:                      # every twelve hours: test every strategy on the main markets
+            try:
+                from .services import findings
+                findings.run()
+            except Exception:
+                log.exception("strategy research failed")
         i += 1
         time.sleep(1800)
 
@@ -164,12 +170,13 @@ async def unhandled(request: Request, exc: Exception):
     return JSONResponse({"detail": "Something went wrong on our side. Please try again."}, status_code=500)
 
 
-from .routers import (admin, ai, alerts, analysis, auth, billing, donate, market, news, practice,  # noqa: E402
-                      push, replay, site, strategy, support, track, user)
+from .routers import (admin, ai, alerts, analysis, auth, billing, classlive, donate, ideas, market,  # noqa: E402
+                      myanalysis, news, practice, push, replay, site, strategies, strategy, support, track, user)
 
 for r in (auth.router, user.router, market.router, analysis.router, news.router, ai.router, billing.router,
           practice.router, strategy.router, track.router, alerts.router, push.router, replay.router, admin.router, site.router,
-          donate.router, support.router, support.admin_router):
+          donate.router, support.router, support.admin_router, strategies.router, myanalysis.router, classlive.router,
+          ideas.router):
     app.include_router(r, prefix="/api")
 
 

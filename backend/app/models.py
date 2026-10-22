@@ -62,6 +62,8 @@ class User(Base):
     learn_consent: Mapped[bool] = mapped_column(Boolean, default=False)                   # may we learn from their charts?
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)       # set by an admin (is_active off)
     suspended_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    strategies: Mapped[str | None] = mapped_column(Text, nullable=True)                 # JSON list of strategy ids
+    strategies_set_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)  # None: ask on next sign-in
 
     org = relationship("Organization", foreign_keys=[org_id], lazy="joined")
 
@@ -354,3 +356,59 @@ class SupportTicket(Base):
     message: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(12), default="open", index=True)     # open | closed
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class UserAnalysis(Base):
+    """An analysis the person made their own: often an AI analysis they edited. It keeps every drawing (the AI's and
+    theirs) and their trade plan, and the AI's grade of it once they ask for one."""
+    __tablename__ = "user_analyses"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str] = mapped_column(String(64))
+    tf: Mapped[str] = mapped_column(String(8))
+    title: Mapped[str] = mapped_column(String(120), default="")
+    source: Mapped[str] = mapped_column(String(16), default="ai")          # ai (edited from the analyst) | own | replay
+    source_analysis_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    replay_at: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    data: Mapped[str] = mapped_column(Text, default="{}")                   # drawings, plan, notes, the AI's original call
+    grade: Mapped[str | None] = mapped_column(Text, nullable=True)          # the AI's grade (JSON)
+    graded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class ClassLive(Base):
+    """A teacher's live chart, shown to their organization's students while it is exposed."""
+    __tablename__ = "class_live"
+    teacher_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    org_id: Mapped[int] = mapped_column(Integer, index=True)
+    title: Mapped[str] = mapped_column(String(120), default="")
+    state: Mapped[str] = mapped_column(Text, default="{}")                  # symbol, tf, replay, drawings, analysis ...
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, onupdate=utcnow)
+
+
+class Idea(Base):
+    """A published trade idea: a chart, a direction and the reasoning, shared with everyone."""
+    __tablename__ = "ideas"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str] = mapped_column(String(64), index=True)
+    tf: Mapped[str] = mapped_column(String(8))
+    side: Mapped[str | None] = mapped_column(String(8), nullable=True)      # long | short | None (education)
+    title: Mapped[str] = mapped_column(String(140))
+    body: Mapped[str] = mapped_column(Text, default="")
+    data: Mapped[str] = mapped_column(Text, default="{}")                   # drawings, plan, price when published
+    likes: Mapped[int] = mapped_column(Integer, default=0)
+    hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
+
+
+class IdeaLike(Base):
+    __tablename__ = "idea_likes"
+    __table_args__ = (UniqueConstraint("idea_id", "user_id"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    idea_id: Mapped[int] = mapped_column(ForeignKey("ideas.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)

@@ -84,7 +84,7 @@ class Settings:
 
         self.admin_email = (env("ADMIN_EMAIL") or "").strip().lower() or None
         self.admin_password = env("ADMIN_PASSWORD")
-        self.trial_days = env_int("TRIAL_DAYS", 7)
+        self.trial_days = env_int("TRIAL_DAYS", 30)
 
         self.google_client_id = env("GOOGLE_CLIENT_ID")
         self.google_client_secret = env("GOOGLE_CLIENT_SECRET")

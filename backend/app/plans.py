@@ -32,11 +32,13 @@ FEATURES = {
     "classroom": "Classroom: shared charts, exercises, student progress",
     "teach_mode": "Teach mode for presenting to students",
     "branding": "Organization branding",
+    "replay": "Replay: analyse past moments and make your own calls on them",
+    "class_live": "Classroom live: teachers expose their chart, students watch",
 }
 # Strategies are open to every plan (v1.3): everyone can build, run and save strategies, within the daily limit below.
 FREE_FEATURES = {"analysis", "review", "streixai", "news", "beginner_mode", "tv_mode", "practice", "alerts", "layouts",
                  "strategy"}
-PRO_FEATURES = set(FEATURES) - {"classroom", "teach_mode", "branding"}
+PRO_FEATURES = set(FEATURES) - {"classroom", "teach_mode", "branding", "class_live"}
 ORG_FEATURES = set(FEATURES)
 
 LIMIT_NAMES = {"analysis": "analyses", "review": "trade reviews", "ai": "StreixAI messages",

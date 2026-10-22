@@ -32,6 +32,9 @@ def user_out(db, user):
                                       invite_code=org.invite_code if user.org_role in ("owner", "teacher") else None),
         entitlements=entitlements(db, user),
         needs_onboarding=not user.experience,
+        # the strategies the analyst uses for this person; until they have picked, the app asks them to
+        strategies=jload(user.strategies, []) or [],
+        strategies_set_at=iso(user.strategies_set_at), needs_strategies=user.strategies_set_at is None,
         # Terms: the web app shows the gate until the person has accepted the current version
         terms_version=user.terms_version, terms_ok=user.terms_version == settings.terms_version,
         learn_consent=bool(user.learn_consent),

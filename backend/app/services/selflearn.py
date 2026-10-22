@@ -129,7 +129,15 @@ def train(rows):
     p_te = _sig(X[cut:] @ w)
     ll_m = _ll(p_te, y[cut:])
     ll_b = _ll(np.full(n - cut, y[:cut].mean()), y[cut:])
-    ship = bool(ll_m < BEAT * ll_b)
+    # per-call gain over the plain win rate: the check ships only if it is better by 1% AND clearly more than chance
+    # (two standard errors); on ~70 test calls a 1% gain alone is often luck
+    yt = y[cut:]
+    eps = 1e-9
+    pb = np.clip(np.full(n - cut, y[:cut].mean()), eps, 1 - eps)
+    pm = np.clip(p_te, eps, 1 - eps)
+    gain = (-(yt * np.log(pb) + (1 - yt) * np.log(1 - pb))) - (-(yt * np.log(pm) + (1 - yt) * np.log(1 - pm)))
+    se = float(gain.std(ddof=1) / np.sqrt(len(gain))) if len(gain) > 1 else float("inf")
+    ship = bool(ll_m < BEAT * ll_b and gain.mean() > 2 * se)
     return dict(out, ship=ship, weights=[round(float(v), 6) for v in w],
                 reason=("The check beat the plain win rate on the latest calls, so it is shown." if ship else
                         "The check did not beat the plain win rate on the latest calls, so it is not shown."),

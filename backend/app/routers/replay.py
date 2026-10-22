@@ -10,7 +10,7 @@ from ..models import AnalysisLog, User, iso, jdump, jload, utcnow
 from ..plans import consume, features_of, refund, require_feature, tier_of
 from ..services import engine, psychology
 from ..services import replay as rp
-from .analysis import _mode, learning_note
+from .analysis import _mode, learning_note, strategies_for
 
 router = APIRouter(prefix="/replay", tags=["replay"])
 
@@ -20,6 +20,7 @@ class AnalyzeIn(BaseModel):
     tf: str = Field("1h", max_length=4)
     at: str = Field(min_length=10, max_length=40)            # ISO time; a time with no zone is UTC
     mode: str | None = Field(None, max_length=12)
+    strategies: list[str] | None = Field(None, max_length=60)
 
 
 class RevealIn(BaseModel):
@@ -45,10 +46,12 @@ def _json(d):
 @router.post("/analyze")
 def analyze(body: AnalyzeIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
     require_feature(user, "analysis")
+    require_feature(user, "replay")
     consume(db, user, "analysis")
     mode = _mode(user, body.mode)
     try:
-        res = engine.analyze(body.symbol.strip(), body.tf, mode=mode, at=body.at)
+        res = engine.analyze(body.symbol.strip(), body.tf, mode=mode, at=body.at,
+                             strategies=strategies_for(user, body.strategies))
     except engine.EngineError as e:
         refund(db, user, "analysis")
         raise HTTPException(422, str(e))
@@ -91,6 +94,7 @@ def _coach(db, user, row, decision):
 
 @router.post("/reveal")
 def reveal(body: RevealIn, user: User = Depends(verified_user), db: Session = Depends(get_db)):
+    require_feature(user, "replay")
     row = db.get(AnalysisLog, body.replay_id)
     if not row or row.user_id != user.id or row.kind != "replay":
         raise HTTPException(404, "Replay not found.")

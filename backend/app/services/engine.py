@@ -18,6 +18,8 @@ import market_data as md            # noqa: E402
 import guru_model as gm             # noqa: E402
 import guru_analyst as ga           # noqa: E402
 import divergence as dvg            # noqa: E402
+import playbook as pb               # noqa: E402
+import strategies as st             # noqa: E402
 
 from . import exchanges, news      # noqa: E402  (exchanges patches market_data on import)
 
@@ -145,9 +147,45 @@ def window_end(at, tf, ahead=0):
     return t, min(t + pd.Timedelta(minutes=md.TF_MIN[_norm_tf(tf)] * int(ahead)), md.utcnow())
 
 
+# chart-only timeframes, built from a standard one: (base timeframe, candles of the base per candle)
+CUSTOM_TF = {"2m": ("1m", 2), "3m": ("1m", 3), "10m": ("5m", 2), "45m": ("15m", 3), "2h": ("1h", 2), "3h": ("1h", 3),
+             "6h": ("1h", 6), "8h": ("4h", 2), "12h": ("4h", 3)}
+
+
+def _custom(symbol, tf, bars, at=None, ahead=0, latest_only=False):
+    """Candles of a chart-only timeframe (e.g. 3m, 2h), aggregated from its base timeframe in UTC-aligned bins."""
+    base, k = CUSTOM_TF[tf]
+    minutes = md.TF_MIN[base] * k
+    if at is not None:
+        t, end = window_end(at, base, ahead * k)
+        C = _get(symbol, base, min(5000, bars * k + k), refresh_s=3600, end=end)
+        df = C["df"]
+    else:
+        C = _get(symbol, base, min(5000, (5 if latest_only else bars) * k + k), refresh_s=5, min_bars=1)
+        df = C["df"]
+        if C["forming"] is not None:
+            df = pd.concat([df, C["forming"].to_frame().T.astype(float)])
+    key = df.index.floor(f"{minutes}min")
+    g = df.groupby(key)
+    out = pd.DataFrame({"open": g["open"].first(), "high": g["high"].max(), "low": g["low"].min(),
+                        "close": g["close"].last(), "volume": g["volume"].sum()})
+    ts = md.epoch_s(out.index)
+    rows = [[int(t), float(o), float(h), float(l), float(c), float(v)]
+            for t, o, h, l, c, v in zip(ts, out["open"], out["high"], out["low"], out["close"], out["volume"])]
+    meta = dict(_meta(C), tf=tf, tf_seconds=minutes * 60, base_tf=base)
+    return meta, rows[-bars:]
+
+
 def candles(symbol, tf, bars=600, at=None, ahead=0):
     """Candles for the chart. With `at` it is a replay: the chart stops at that moment, and shows `ahead` more candles
     once the person has revealed what happened next."""
+    if tf in CUSTOM_TF:
+        bars = int(min(max(bars, 50), 2000))
+        meta, rows = _custom(symbol, tf, bars, at, ahead)
+        out = dict(meta, candles=rows)
+        if at is not None:
+            out["replay_at"] = parse_moment(at).isoformat()
+        return out
     tf = _norm_tf(tf)
     bars = int(min(max(bars, 50), 5000))
     if at is None:
@@ -167,13 +205,21 @@ def _pin_age(C, asof):
 def latest(symbol, tf):
     """The last few candles (incl. the forming one) for live updates. The chart asks every 5 seconds. Every viewer shares
     one upstream request per symbol every 5 seconds, which keeps paid data plans (Twelve Data) within their limits."""
-    tf = _norm_tf(tf)
+    custom = tf in CUSTOM_TF
+    tf = tf if custom else _norm_tf(tf)
     key = (symbol.upper(), tf)
     now = time.time()
     with _latest_lock:
         hit = _latest_cache.get(key)
         if hit and now - hit[0] < 5.0:
             return hit[1]
+    if custom:
+        meta, rows = _custom(symbol, tf, 3, latest_only=True)
+        out = dict(symbol=symbol, tf=tf, price=meta["price"], decimals=meta["decimals"], candles=rows[-3:],
+                   source=meta["source"])
+        with _latest_lock:
+            _latest_cache[key] = (now, out)
+        return out
     C = _get(symbol, tf, 5, refresh_s=5, min_bars=1)
     rows = candles_payload(C)[-3:]
     out = dict(symbol=symbol, tf=tf, price=C["price"], decimals=C["decimals"], candles=rows, source=C["source"])
@@ -226,7 +272,8 @@ def _attach_news(res, spec, tf):
     return res
 
 
-def analyze(symbol, tf, account=1000.0, risk_pct=1.0, mode="pro", user_drawings=None, leverage=None, at=None):
+def analyze(symbol, tf, account=1000.0, risk_pct=1.0, mode="pro", user_drawings=None, leverage=None, at=None,
+            strategies=None):
     """The analysis. With `at` it is a replay: run as it would have been at that moment, from candles that had closed
     by then. Today's headlines are left out, because they did not exist then."""
     tf = _norm_tf(tf)
@@ -240,7 +287,8 @@ def analyze(symbol, tf, account=1000.0, risk_pct=1.0, mode="pro", user_drawings=
             _pin_age(C, asof)
         try:
             res = ga.analyze(symbol, tf, account=float(account), risk_pct=float(risk_pct), mode=mode,
-                             user_drawings=user_drawings or None, brain=brain(), leverage=leverage, data=C, asof=asof)
+                             user_drawings=user_drawings or None, brain=brain(), leverage=leverage, data=C, asof=asof,
+                             strategies=strategies)
         except ValueError as e:
             raise EngineError(str(e))
         res = ga.jsonable(res)
@@ -316,3 +364,59 @@ def summarize(res, report_chars=5000):
         user_drawings=res.get("user_drawings"), learning=res.get("learning"),
         asset_class=(res.get("meta") or {}).get("asset_class"),
         report=(res.get("report") or "")[:report_chars])
+
+
+def whatif(symbol, tf, price, strategies=None):
+    """'If I enter here, now': buy and sell scenarios from a price on the latest candle (playbook.whatif)."""
+    tf = _norm_tf(tf)
+    if not _sem.acquire(timeout=60):
+        raise EngineError("The analyst is busy right now. Try again in a few seconds.")
+    try:
+        C = _get(symbol, tf, ga.BARS[tf], refresh_s=8)
+        last = C["forming"] if C["forming"] is not None else C["df"].iloc[-1]
+        lo, hi = float(last["low"]), float(last["high"])
+        atr_now = float(C["df"]["high"].sub(C["df"]["low"]).tail(14).mean())
+        if not (lo - 3 * atr_now <= float(price) <= hi + 3 * atr_now):
+            raise EngineError("Pick a price near the latest candle: 'analyse from here' is for entering now.")
+        try:
+            ga.analyze(symbol, tf, brain=brain(), data=C, strategies=strategies)
+        except ValueError as e:
+            raise EngineError(str(e))
+        X = ga._STATE["ctx"].get((C["symbol"], tf))
+        if X is None:
+            raise EngineError("The analysis context is not available. Try again.")
+        out = pb.whatif(X, float(price), brain())
+        out.update(symbol=C["symbol"], tf=tf, decimals=C["decimals"])
+        return ga.jsonable(out)
+    finally:
+        _sem.release()
+
+
+_fit_cache, _fit_lock = {}, threading.Lock()
+
+
+def fit(symbol, tf, ids=None, bars=3000, ttl=1800):
+    """Every strategy's record on this market and timeframe (after its costs), best first. Cached for 30 minutes."""
+    tf = _norm_tf(tf)
+    key = (symbol.upper(), tf, tuple(sorted(ids)) if ids else None)
+    now = time.time()
+    with _fit_lock:
+        hit = _fit_cache.get(key)
+        if hit and now - hit[0] < ttl:
+            return hit[1]
+    C = _get(symbol, tf, bars, refresh_s=600, min_bars=300)
+    dfe, A = ga.se.analyze(C["df"])
+    ctx = st.Ctx(dfe, tf, A, C["asset_class"])
+    cost, slip = gm.cost_of(C["sub"])
+    rows = st.fit(ctx, ids, cost, slip)
+    out = dict(symbol=C["symbol"], tf=tf, candles=int(len(dfe)), source=C["source"], asset_class=C["asset_class"],
+               start=str(dfe.index[0]), end=str(dfe.index[-1]), sweep_depth=ctx.sweep_depth(),
+               costs=dict(round_trip_pct=cost * 100, stop_slip_pct=slip * 100), rows=ga.jsonable(rows),
+               note="Backtests on the candles loaded for this market, after spread, fees and slippage, with stops placed "
+                    "past nearby liquidity. Past results don't promise future ones: use them to compare strategies, "
+                    "not as a forecast.")
+    with _fit_lock:
+        _fit_cache[key] = (now, out)
+        if len(_fit_cache) > 500:
+            _fit_cache.clear()
+    return out

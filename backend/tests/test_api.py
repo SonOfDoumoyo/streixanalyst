@@ -92,7 +92,7 @@ def t_health(c):
     r = c.get("/api/health")
     check(r.status_code == 200 and r.json()["ok"], r.text)
     r = c.get("/api/config")
-    check(r.json()["trial_days"] == 7 and r.json()["google"] is False, r.text)
+    check(r.json()["trial_days"] == 30 and r.json()["google"] is False, r.text)
     r = c.get("/api/auth/providers")
     check(r.json() == dict(google=False, linkedin=False, email=True, password_reset_email=False), r.text)
 
@@ -118,7 +118,8 @@ def t_signup_and_me(c):
     check(u["email"] == "ada@example.com" and "token" not in r.json(), u)
     check("sa_session" in r.cookies or "sa_session" in c.cookies, "session cookie")
     e = u["entitlements"]
-    check(e["tier"] == "trial" and e["trial_days_left"] == 7 and "strategy" in e["features"], e)
+    check(e["tier"] == "trial" and e["trial_days_left"] == 30 and "strategy" in e["features"] and "replay" in e["features"],
+          e)
     me = c.get("/api/auth/me").json()["user"]
     check(me["streak_days"] == 1 and me["needs_onboarding"] is False, me)
     check(signup(c, "ada@example.com").status_code == 409, "duplicate email")
@@ -553,7 +554,8 @@ def t_manual_and_admin(c):
     check(r.status_code == 200, r.text)
     d = r.json()
     ref = d["payment"]["reference"]
-    check(len(ref) == 8 and ref.startswith("SA") and d["account"]["number"] == "2385227704" and d["amount"] == 46500, d)
+    want = c.get("/api/billing/plans").json()["quotes"]["org"]["1"]["naira"] * 6       # $ per seat × 6 seats
+    check(len(ref) == 8 and ref.startswith("SA") and d["account"]["number"] == "2385227704" and d["amount"] == want, d)
     check(ref in d["instructions"] and "UBA" in d["instructions"], d["instructions"])
     r = c.post(f"/api/billing/manual/{ref}/proof", data=dict(payer_name="Ada Lovelace"),
                files=dict(file=("receipt.txt", b"hello", "text/plain")), headers=H)
@@ -578,7 +580,7 @@ def t_manual_and_admin(c):
     check(r.status_code == 200 and r.json()["payment"]["applied"], r.text)
     check(adm.post(f"/api/admin/payments/{mine['id']}/approve", json={}, headers=H).status_code == 409, "no double apply")
     me = c.get("/api/auth/me").json()["user"]
-    check(me["entitlements"]["tier"] == "org" and me["org"]["role"] == "owner" and me["org"]["seats"] >= 1000, me["org"])  # flat price: capacity is not a seat count
+    check(me["entitlements"]["tier"] == "org" and me["org"]["role"] == "owner" and me["org"]["seats"] == 6, me["org"])  # per-seat price: the owner paid for 6 people
     code = me["org"]["invite_code"]
     stu = client()
     r = signup(stu, "student@example.com", invite_code=code)
@@ -1287,6 +1289,214 @@ def t_behaviour_model(_c):
           "the command line reads a JSON Lines export, and a saved model scores the same after reading it back")
 
 
+def t_strategies(c):
+    """The strategy catalog, the person's choice (asked for until made), and analysing with only that choice."""
+    signup(c, "strats@example.com")
+    cat = c.get("/api/strategies").json()
+    ids = {x["id"] for x in cat["strategies"]}
+    check(len(cat["strategies"]) >= 40 and {"ict_sweep_mss", "supertrend", "scalp_ema_vwap", "ft_trend"} <= ids, ids)
+    check({g["id"] for g in cat["groups"]} >= {"smc", "scalp", "fixed_time"}, cat["groups"])
+    me = c.get("/api/auth/me").json()["user"]
+    check(me["needs_strategies"] is True and me["strategies"] == [], me)
+    check(c.put("/api/strategies/mine", json=dict(ids=["nope"]), headers=H).status_code == 422, "unknown ids refused")
+    r = c.put("/api/strategies/mine", json=dict(ids=["supertrend", "ict_sweep_mss", "ft_trend", "nope"]), headers=H)
+    check(r.status_code == 200 and r.json()["ids"] == ["ict_sweep_mss", "supertrend", "ft_trend"], r.text)
+    me = c.get("/api/auth/me").json()["user"]
+    check(me["needs_strategies"] is False and me["strategies"] == ["ict_sweep_mss", "supertrend", "ft_trend"], me)
+    a = c.post("/api/analysis/run", json=dict(symbol="BTCUSDT", tf="15m"), headers=H).json()
+    sb = a["strategies"]
+    check(sb["mode"] == "chosen" and [x["id"] for x in sb["items"]] == ["ict_sweep_mss", "supertrend", "ft_trend"], sb)
+    check(all("record" in x and "wait_for" in x for x in sb["items"]), sb["items"])
+    for p_ in a["plans"]:
+        check(p_.get("strategy") in ("ict_sweep_mss", "supertrend"), p_.get("strategy"))
+    v = a["verdict"]
+    check(v.get("confidence") and v["confidence"]["level"] in ("none", "low", "moderate", "good") and v.get("tf_note"), v)
+    check("certain" not in v["headline"].lower() or "not a certainty" in v["headline"].lower(), v["headline"])
+    check(a["mtf"]["rows"] and any(r_.get("current") for r_ in a["mtf"]["rows"]), a["mtf"])
+    check(a["fixed_time"] and a["fixed_time"]["breakeven"] > 0.5, a["fixed_time"])
+    check(a["liquidity"] and a["liquidity"]["depth_atr"] > 0, a["liquidity"])
+    check(set(a["layers_scope"]) >= {"plan", "liquidity", "structure"} and "candles" not in a["layers_scope"], a["layers_scope"])
+    drawn = [d for d in a["drawings"] if d["layer"] not in ("price",)]
+    check(all(d.get("why") for d in drawn), [d["layer"] + d["kind"] for d in drawn if not d.get("why")][:5])
+    if a["plan"]:
+        lines = [d for d in a["drawings"] if d["layer"] == "plan" and d["kind"] == "line"]
+        check(lines and all(d.get("copy") for d in lines), lines[:2])
+        check(a["how_to_enter"] and "Stop loss" in " ".join(a["how_to_enter"]), a["how_to_enter"])
+    # a request can override the saved choice; an unknown id alone falls back to the saved choice
+    a2 = c.post("/api/analysis/run", json=dict(symbol="BTCUSDT", tf="15m", strategies=["rsi_strategy"]), headers=H).json()
+    check([x["id"] for x in a2["strategies"]["items"]] == ["rsi_strategy"], a2["strategies"])
+    # what if I enter from here (the latest candle)
+    price = a["price"]
+    r = c.post("/api/analysis/whatif", json=dict(symbol="BTCUSDT", tf="15m", price=price), headers=H)
+    check(r.status_code == 200, r.text[:300])
+    w = r.json()
+    check({x["side"] for x in w["sides"]} == {"long", "short"} and w["text"], w)
+    for x in w["sides"]:
+        d = 1 if x["side"] == "long" else -1
+        check(d * (x["entry"] - x["sl"]) > 0 and all(d * (t - x["entry"]) > 0 for t in x["tps"]), x)
+    r = c.post("/api/analysis/whatif", json=dict(symbol="BTCUSDT", tf="15m", price=price * 5), headers=H)
+    check(r.status_code == 422 and "latest candle" in r.json()["detail"], r.text)
+    # how every strategy has done on a market
+    f = c.get("/api/strategies/fit?symbol=EURUSD&tf=15m").json()
+    check(f["rows"] and f["candles"] > 300 and "note" in f, {k: f[k] for k in f if k != "rows"})
+    check(all("trades" in r_ or "error" in r_ for r_ in f["rows"]), f["rows"][:3])
+
+
+def t_strategy_engine(_c):
+    """The liquidity guard moves stops past nearby pools (never closer), and split strategies mean no trade."""
+    import strategies as st
+    import playbook as pb
+    import structure_engine as se
+    df = se.make_demo_data(n=1200, freq="15min")
+    df.index = df.index.tz_localize("UTC") if df.index.tz is None else df.index
+    dfe, A = se.analyze(df)
+    ctx = st.Ctx(dfe, "15m", A)
+    i = ctx.n - 1
+    lows = ctx.pools(i, -1)
+    price = float(ctx.c[-1])
+    below = [q for q in lows if q < price - 0.3 * ctx.atr[i]]
+    if below:
+        pool = max(below)
+        stop = pool - 0.02 * ctx.atr[i]                  # a few ticks under the low: where stop hunts finish
+        new, hit = st.guard_stop(ctx, i, 1, price, stop)
+        check(hit is not None and new < stop - 0.1 * ctx.atr[i], (stop, new, hit))
+        far = pool - 3 * ctx.atr[i]
+        check(st.guard_stop(ctx, i, 1, price, far)[0] <= far, "a stop already far away never moves closer")
+    for sid in [s["id"] for s in st.CATALOG]:
+        tr = st.backtest(ctx, sid, 1e-4, 0.3e-4)
+        for t in tr:
+            if not t.get("open") and "reason" in t:
+                d = 1 if t["side"] == "long" else -1
+                check(d * (t["entry"] - t["stop"]) > 0 and d * (t["target"] - t["entry"]) > 0, (sid, t))
+    rec = st.record([dict(open=False, r=0.85), dict(open=False, r=-1.0)], fixed_time=True)
+    check(abs(rec["breakeven"] - 1 / 1.85) < 1e-9 and rec["win_rate"] == 0.5, rec)
+    X = dict(chosen=["supertrend", "rsi_strategy"], price=100.0, atr=1.0, ladder=("1h", "4h"), htf={},
+             records={"supertrend": dict(score=0.0), "rsi_strategy": dict(score=0.0)})
+    plans = [dict(strategy="supertrend", dir=1, type="market", entry=100.0, signal_age=0),
+             dict(strategy="rsi_strategy", dir=-1, type="market", entry=100.0, signal_age=0)]
+    cf = pb.conflict(plans, X)
+    check(cf["split"] is True and "disagree" in cf["note"], cf)
+    X["records"]["supertrend"]["score"] = 0.9
+    cf = pb.conflict(plans, X)
+    check(cf["split"] is False and cf["side"] == 1, cf)
+    v = pb.soften(dict(action="BUY LIMIT", trade=True, headline="x", grade="A"), None, dict(X, tf="1h", f=None),
+                  pb.confidence(None, X), dict(split=True, note="Your strategies disagree"))
+    check(v["action"].startswith("NO TRADE") or v["trade"] is False, v)
+
+
+def t_my_analyses(c):
+    signup(c, "mine@example.com")
+    c.put("/api/strategies/mine", json=dict(ids=["ict_sweep_mss", "ob_retest"]), headers=H)
+    a = c.post("/api/analysis/run", json=dict(symbol="SOLUSDT", tf="1h"), headers=H).json()
+    p, atr = a["price"], a["atr"]
+    draw = [dict(id="d1", type="hline", points=[dict(t=a["candles"][-5][0], p=p - 2 * atr)], style=dict(text="my support")),
+            dict(id="d2", type="rect", points=[dict(t=a["candles"][-30][0], p=p - 3 * atr), dict(t=a["candles"][-2][0], p=p - 2.5 * atr)],
+                 style={})]
+    body = dict(symbol="SOLUSDT", tf="1h", title="My SOL idea", source="ai", source_analysis_id=a["analysis_id"],
+                drawings=draw, plan=dict(side="long", entry=p, sl=p - 1.5 * atr, tps=[p + 3 * atr]),
+                ai=dict(action=a["verdict"]["action"]))
+    r = c.post("/api/my-analyses", json=body, headers=H)
+    check(r.status_code == 201 and r.json()["drawings_count"] == 2 and r.json()["plan"]["side"] == "long", r.text[:300])
+    aid = r.json()["id"]
+    bad = dict(body, plan=dict(side="long", entry=p, sl=p + atr, tps=[p + 2 * atr]))
+    check(c.post("/api/my-analyses", json=bad, headers=H).status_code == 422, "stop on the wrong side")
+    r = c.patch(f"/api/my-analyses/{aid}", json=dict(title="Renamed", notes="wait for London"), headers=H)
+    check(r.json()["title"] == "Renamed" and r.json()["notes"] == "wait for London", r.text[:200])
+    items = c.get("/api/my-analyses").json()["items"]
+    check(len(items) == 1 and items[0]["id"] == aid, items)
+    r = c.post(f"/api/my-analyses/{aid}/grade", headers=H)
+    check(r.status_code == 200, r.text[:400])
+    g = r.json()["grade"]
+    check(g["review"]["ok"] and g["score"] is not None and g["summary"] and g["liquidity"], g)
+    check(len(g["levels"]) == 2 and g["ai"]["action"], g["levels"])
+    check(c.get(f"/api/my-analyses/{aid}").json()["grade"]["score"] == g["score"], "grade saved")
+    other = client()
+    signup(other, "notmine@example.com")
+    check(other.get(f"/api/my-analyses/{aid}").status_code == 404, "someone else's analysis is private")
+    check(c.delete(f"/api/my-analyses/{aid}", headers=H).json()["ok"], "deleted")
+    check(c.get("/api/my-analyses").json()["items"] == [], "gone")
+
+
+def t_class_live(c):
+    from app.db import SessionLocal
+    from app.models import Organization, User
+    from datetime import timedelta
+    from app.models import utcnow
+    teacher, student, outsider = client(), client(), client()
+    signup(teacher, "teacher@school.com")
+    signup(student, "student@school.com")
+    signup(outsider, "outsider@else.com")
+    with SessionLocal() as db:
+        org = Organization(name="Streix Academy", seats=10, invite_code="ACAD123", plan_expires_at=utcnow() + timedelta(days=30))
+        db.add(org)
+        db.flush()
+        for email, role in (("teacher@school.com", "teacher"), ("student@school.com", "member")):
+            u = db.query(User).filter(User.email == email).one()
+            u.org_id, u.org_role = org.id, role
+        db.commit()
+    state = dict(title="London open", symbol="EURUSD", tf="15m", drawings=[dict(id="x", type="hline", points=[dict(t=1, p=1.1)])],
+                 analysis=dict(verdict=dict(action="Possible BUY"), sizing=dict(units=5), account=50000), note="watch the sweep")
+    check(student.put("/api/class/live", json=state, headers=H).status_code == 403, "students can't go live")
+    r = teacher.put("/api/class/live", json=state, headers=H)
+    check(r.status_code == 200 and r.json()["live"], r.text)
+    tid = r.json()["teacher_id"]
+    lst = student.get("/api/class/live").json()["items"]
+    check(len(lst) == 1 and lst[0]["symbol"] == "EURUSD" and lst[0]["title"] == "London open", lst)
+    w = student.get(f"/api/class/live/{tid}").json()
+    check(w["live"] and w["state"]["drawings"] and "account" not in w["state"]["analysis"] and
+          "sizing" not in w["state"]["analysis"], w["state"])
+    check(outsider.get(f"/api/class/live/{tid}").status_code == 403, "other organizations can't watch")
+    check(outsider.get("/api/class/live").json()["items"] == [], "no org: nothing to watch")
+    teacher.delete("/api/class/live", headers=H)
+    check(student.get("/api/class/live").json()["items"] == [], "stopped")
+    check(student.get(f"/api/class/live/{tid}").json()["state"] is None, "no state after stopping")
+
+
+def t_ideas(c):
+    a, b = client(), client()
+    signup(a, "idea-a@example.com")
+    signup(b, "idea-b@example.com")
+    r = a.post("/api/ideas", json=dict(symbol="xauusd", tf="1h", side="long", title="Gold sweep of Asia low",
+                                       body="Waiting for London to take the Asian low.", drawings=[], plan=dict(entry=1, sl=0.9)),
+               headers=H)
+    check(r.status_code == 201 and r.json()["symbol"] == "XAUUSD", r.text)
+    iid = r.json()["id"]
+    feed = b.get("/api/ideas").json()["items"]
+    check(feed and feed[0]["id"] == iid and feed[0]["author"]["name"], feed)
+    check(b.post(f"/api/ideas/{iid}/like", headers=H).json() == dict(id=iid, likes=1, liked=True), "liked")
+    check(b.get("/api/ideas?scope=top").json()["items"][0]["liked"] is True, "liked shows")
+    check(b.post(f"/api/ideas/{iid}/like", headers=H).json()["likes"] == 0, "unliked")
+    check(b.delete(f"/api/ideas/{iid}", headers=H).status_code == 403, "can't delete others' ideas")
+    check(a.get("/api/ideas?scope=mine").json()["items"][0]["id"] == iid, "mine")
+    check(a.delete(f"/api/ideas/{iid}", headers=H).json()["ok"], "deleted")
+
+
+def t_replay_gate(c):
+    """Replay is a Pro feature that every new account has during its 30-day trial."""
+    from app.db import SessionLocal
+    from app.models import User, utcnow
+    from datetime import timedelta
+    signup(c, "replay-free@example.com")
+    at = (utcnow() - timedelta(days=3)).strftime("%Y-%m-%dT%H:00:00Z")
+    check(c.get(f"/api/market/candles?symbol=BTCUSDT&tf=1h&bars=200&at={at}").status_code == 200, "trial: replay open")
+    with SessionLocal() as db:
+        u = db.query(User).filter(User.email == "replay-free@example.com").one()
+        u.trial_ends_at = utcnow() - timedelta(days=1)
+        db.commit()
+    r = c.get(f"/api/market/candles?symbol=BTCUSDT&tf=1h&bars=200&at={at}")
+    check(r.status_code == 402 and r.json()["detail"]["feature"] == "replay", r.text)
+    r = c.post("/api/replay/analyze", json=dict(symbol="BTCUSDT", tf="1h", at=at), headers=H)
+    check(r.status_code == 402, r.text[:200])
+    check(c.get("/api/market/candles?symbol=BTCUSDT&tf=1h&bars=200").status_code == 200, "live charts stay free")
+    # chart-only intervals
+    d = c.get("/api/market/candles?symbol=BTCUSDT&tf=3m&bars=120").json()
+    check(d["tf"] == "3m" and d["tf_seconds"] == 180 and len(d["candles"]) > 50, {k: d[k] for k in d if k != "candles"})
+    ts = [x[0] for x in d["candles"]]
+    check(all(b_ - a_ >= 180 for a_, b_ in zip(ts, ts[1:])) and all(t % 180 == 0 for t in ts), ts[:5])
+    lt = c.get("/api/market/latest?symbol=BTCUSDT&tf=2h").json()
+    check(lt["tf"] == "2h" and lt["candles"], lt)
+
+
 def main():
     t0 = time.time()
     with client() as c:
@@ -1318,7 +1528,7 @@ def main():
         run("t_admin_accounts", t_admin_accounts, client())
         run("t_security", t_security, client())
         for t in (t_terms_and_site, t_stage2, t_practice, t_strategy, t_scalp_template, t_tracker_rules, t_track_record, t_alerts, t_push, t_replay,
-                  t_learning_export):
+                  t_learning_export, t_strategies, t_strategy_engine, t_my_analyses, t_class_live, t_ideas, t_replay_gate):
             run(t.__name__, t, client())
     bad = [r for r in RESULTS if not r[1]]
     print(f"\n{len(RESULTS) - len(bad)}/{len(RESULTS)} passed in {time.time() - t0:.0f}s")

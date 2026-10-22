@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from ..deps import client_ip, current_user
 from ..models import User
+from ..plans import require_feature
 from ..security import market_limiter
 from ..services import catalog, engine
 
@@ -35,6 +36,8 @@ def candles(symbol: str, tf: str = "1h", bars: int = Query(600, ge=50, le=5000),
             user: User = Depends(current_user)):
     """Live candles. With `at` (a replay): the candles up to that moment, and `ahead` more once revealed."""
     _limit(f"u{user.id}")
+    if at is not None:
+        require_feature(user, "replay")
     return _run(engine.candles, symbol, tf, bars, at, ahead)
 
 
