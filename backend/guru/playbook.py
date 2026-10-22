@@ -318,8 +318,12 @@ def soften(verdict, p, X, conf, clash):
                      "Wait for " + "; or ".join(waits) + ".")
         return v
     if clash and clash.get("split"):
-        v.update(action="NO TRADE (strategies disagree)", trade=False, side=None, conflict=clash,
-                 headline=clash["note"])
+        # still the best entry, flagged: the chosen strategies point both ways
+        v.update(trade=False, side=None, conflict=clash, headline=clash["note"])
+        if p is not None:
+            word = "BUY" if p["dir"] == 1 else "SELL"
+            how = "at market" if p["type"] == "market" else f"{p['type']} at {X['f'].p(p['entry'])}"
+            v.update(best=True, best_side=p["side"], action=f"Best entry (strategies disagree) · {word} {how}")
         return v
     if clash and clash.get("sellers") and clash.get("buyers"):
         v["conflict"] = clash
@@ -331,6 +335,12 @@ def soften(verdict, p, X, conf, clash):
             g = obj.get("grade")
             if g in order and order.index(g) < order.index(cap):
                 obj["grade"] = cap
+    if v.get("best") and p is not None:
+        word = "buy" if p["dir"] == 1 else "sell"
+        how = "at market" if p["type"] == "market" else f"{p['type']} at {X['f'].p(p['entry'])}"
+        v["headline"] = (f"Best entry: {word} {how} · grade {v.get('grade')} · {conf['level']} confidence. Not a "
+                         f"confirmed setup" + (f" ({v['why_not']})" if v.get("why_not") else "")
+                         + ": take it smaller, or wait for the reasons against it to clear")
     if v.get("trade") and p is not None:
         word = "BUY" if p["dir"] == 1 else "SELL"
         how = {"market": "now (market)", "limit": f"limit at {X['f'].p(p['entry'])}",
@@ -407,20 +417,140 @@ def _frame_row(tf, df, A, ids, price=None, asset_class=None):
                 signals=sigs)
 
 
+DAILY_UP = ("1D", "3D", "1W", "1M")
+
+
+def _scan_frame(tf, df, A, ids, asset_class):
+    """Every price strategy in the catalog on one timeframe: the live setups (entry, stop, target), and for the
+    person's own strategies what each one is doing (a setup, waiting for something, or a setup that ran without
+    them). Graded later, once the bigger timeframes' trends are known."""
+    ctx = st.Ctx(df, tf, A, asset_class)
+    price = float(df["close"].iloc[-1])
+    atr = float(df["atr"].iloc[-1]) if "atr" in df else float((df["high"] - df["low"]).tail(14).mean())
+    cands, mine, total = [], [], 0
+    for sid, s in st.BY_ID.items():
+        if s["fixed_time"] or (s["intraday"] and tf in DAILY_UP):
+            if ids and sid in ids and not s["fixed_time"]:
+                mine.append(dict(id=sid, name=s["name"], status="n/a", text="made for intraday charts"))
+            continue
+        total += 1
+        try:
+            lv = st.live(ctx, sid, price=price, max_age=3)
+        except Exception:
+            continue
+        if lv.get("signal"):
+            d = lv["dir"]
+            risk = abs(lv["entry"] - lv["sl"])
+            if risk <= 0:
+                continue
+            # price that moved against the signal gives a better fill now; price that ran with it means wait for a return
+            kind = "market" if d * (price - lv["entry"]) <= 0.15 * risk and d * (price - lv["sl"]) > 0.3 * risk else "limit"
+            cands.append(dict(id=sid, name=s["name"], group=s["group"], dir=d, side="long" if d == 1 else "short",
+                              type=kind, entry=float(price if kind == "market" else lv["entry"]), sl=float(lv["sl"]),
+                              tp=float(lv["tp"]), rr=round(abs(lv["tp"] - (price if kind == "market" else lv["entry"]))
+                                                          / abs((price if kind == "market" else lv["entry"]) - lv["sl"]), 2),
+                              age=int(lv["age"]),
+                              chase=bool(lv.get("chase"))))
+        if ids and sid in ids:
+            if lv.get("signal"):
+                mine.append(dict(id=sid, name=s["name"], status="entry", side="long" if lv["dir"] == 1 else "short",
+                                 entry=float(lv["entry"]), sl=float(lv["sl"]), tp=float(lv["tp"]),
+                                 text=f"{'buy' if lv['dir'] == 1 else 'sell'} signal "
+                                      + ("on the last candle" if lv["age"] == 0 else f"{lv['age']} candles ago")))
+            elif lv.get("missed"):
+                m = lv["missed"]
+                mine.append(dict(id=sid, name=s["name"], status="missed",
+                                 text=f"signalled a {'buy' if m['dir'] == 1 else 'sell'} {m['age']} candles ago and ran "
+                                      f"without you: don't chase it"))
+            else:
+                last = lv.get("last")
+                mine.append(dict(id=sid, name=s["name"], status="wait",
+                                 text=f"waits for {s['wait_for']}"
+                                      + (f" (last signal {last['age']} candles ago)" if last else "")))
+    return dict(cands=cands, mine=mine, total=total, price=price, atr=atr)
+
+
+def _grade_scan(rows):
+    """Grade each timeframe's live setups with what the analyst checks first: the timeframe's own trend, the two
+    timeframes above it, room to the target, a fresh signal, and not chasing. The best one per timeframe, and the
+    best across all of them (the best-case entry)."""
+    order = sorted(rows, key=lambda r: -md.TF_MIN[r["tf"]])
+    best_all = None
+    for k, r in enumerate(order):
+        sc = r.pop("_scan", None)
+        if sc is None:
+            continue
+        ups = [u["trend"] for u in order[max(0, k - 2):k]][::-1]          # the next higher, then the one above
+        graded = []
+        for c in sc["cands"]:
+            d = c["dir"]
+            pts, why = 0.0, []
+            if r["trend"] == d:
+                pts += 1.5
+                why.append(f"{r['tf']} trend agrees")
+            elif r["trend"] == -d:
+                pts -= 0.5
+                why.append(f"against the {r['tf']} trend")
+            for j, u in enumerate(ups):
+                if u == d:
+                    pts += 1.0 if j == 0 else 0.5
+            if ups and ups[0] == d:
+                why.append("the timeframe above agrees")
+            elif ups and ups[0] == -d:
+                why.append("the timeframe above is against it")
+            if c["rr"] >= 2:
+                pts += 1.0
+                why.append(f"{c['rr']:.1f}R to target")
+            elif c["rr"] < 1.2:
+                pts -= 0.5
+            if (d == 1 and r["zone"] == "discount") or (d == -1 and r["zone"] == "premium"):
+                pts += 0.5
+                why.append(f"in {r['zone']}")
+            if c["age"] == 0:
+                pts += 0.5
+            if c["chase"]:
+                pts -= 1.0
+                why.append("price has moved: wait for the return")
+            grade = "A" if pts >= 4 else "B" if pts >= 3 else "C" if pts >= 1.5 else "D"
+            graded.append(dict(c, pts=round(pts, 2), grade=grade, why=why[:3]))
+        graded.sort(key=lambda c: -c["pts"])
+        r["scan"] = dict(best=graded[0] if graded else None, others=graded[1:3], live=len(graded), total=sc["total"],
+                         mine=sc["mine"])
+        if not graded:
+            waits = [m for m in sc["mine"] if m["status"] in ("wait", "missed")]
+            r["scan"]["why"] = (f"No live setup on {r['tf']} from any of the {sc['total']} strategies"
+                                + (f": {waits[0]['name']} {waits[0]['text']}" if waits else "") + ".")
+        if graded:
+            g = graded[0]
+            score = g["pts"] + (0.3 if r.get("current") else 0.0)
+            if best_all is None or score > best_all[0]:
+                best_all = (score, r["tf"], g)
+    return None if best_all is None else dict(tf=best_all[1], **best_all[2])
+
+
 def mtf(X, symbol, HT, asof=None, ids=None):
     """The timeframe table: every timeframe from the higher ones the analyst loaded to one lower timeframe."""
     rows = []
     tf = X["tf"]
+    ac = X["asset_class"]
+
+    def scanned(row, df_, A_, tf_):
+        try:
+            row["_scan"] = _scan_frame(tf_, df_, A_, ids, ac)
+        except Exception:
+            pass
+        return row
+
     for h in X["ladder"][::-1]:
         v = HT.get(h)
         if v is None:
             continue
         try:
-            rows.append(_frame_row(h, v["df"], v["A"], ids, asset_class=X["asset_class"]))
+            rows.append(scanned(_frame_row(h, v["df"], v["A"], ids, asset_class=ac), v["df"], v["A"], h))
         except Exception:
             continue
     try:
-        rows.append(dict(_frame_row(tf, X["df"], X["A"], ids, asset_class=X["asset_class"]), current=True))
+        rows.append(scanned(dict(_frame_row(tf, X["df"], X["A"], ids, asset_class=ac), current=True), X["df"], X["A"], tf))
     except Exception:
         pass
     low = LOWER.get(tf)
@@ -428,10 +558,16 @@ def mtf(X, symbol, HT, asof=None, ids=None):
         try:
             Cl = md.get_candles(symbol, low, bars=600, end=asof, min_bars=60)
             dl, Al = se.analyze(Cl["df"])
-            rows.append(dict(_frame_row(low, dl, Al, ids, asset_class=X["asset_class"]), lower=True))
+            rows.append(scanned(dict(_frame_row(low, dl, Al, ids, asset_class=ac), lower=True), dl, Al, low))
         except Exception:
             pass
     rows.sort(key=lambda r: -md.TF_MIN[r["tf"]])
+    best_case = None
+    try:
+        best_case = _grade_scan(rows)
+    except Exception:
+        for r in rows:
+            r.pop("_scan", None)
     if not rows:
         return dict(rows=[], alignment=0.0, text="")
     w = np.array([TF_WEIGHT.get(r["tf"], 1.0) for r in rows])
@@ -443,7 +579,7 @@ def mtf(X, symbol, HT, asof=None, ids=None):
     dns = [r["tf"] for r in rows if r["bias"] < -0.2]
     text = (f"Timeframes {word}: up on {', '.join(ups) or 'none'}; down on {', '.join(dns) or 'none'}."
             + (" Trade with the higher timeframes, or stand aside when they fight." if word == "mixed" else ""))
-    return dict(rows=rows, alignment=round(align, 2), word=word, text=text)
+    return dict(rows=rows, alignment=round(align, 2), word=word, text=text, best=best_case)
 
 
 def fixed_time(X, ids):

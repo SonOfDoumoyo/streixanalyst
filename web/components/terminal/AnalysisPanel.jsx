@@ -4,7 +4,7 @@ import Icon from "@/components/Icons";
 import { useAuth } from "@/components/Providers";
 import { requestAlert } from "@/components/AlertsBell";
 import { fmtDateTime, fmtMoney, fmtPct, fmtPrice, fmtQty, minutesHuman, TF_LABEL, timeAgo } from "@/lib/format";
-import { gradeClass, LAYERS, verdictTone } from "@/lib/analysis";
+import { gradeClass, LAYERS } from "@/lib/analysis";
 import DirectionBar from "@/components/DirectionBar";
 import PlanLadder from "@/components/terminal/PlanLadder";
 import { hudOf } from "@/components/terminal/ChartHud";
@@ -289,165 +289,291 @@ function FixedTime({ ft }) {
   );
 }
 
-function Mtf({ mtf }) {
-  if (!mtf || !mtf.rows || !mtf.rows.length) return null;
+const cap = (x) => (x ? x[0].toUpperCase() + x.slice(1) : x);
+const pctOf = (x) => (Number.isFinite(x) ? `${Math.round(x * 100)}%` : "–");
+
+/** One row of the "More detail" list: a title, a short summary on the right, the section inside when opened. */
+function More({ title, hint, children, tour, open = false }) {
   return (
-    <div className="mtf" data-tour="mtf">
-      <div className="mtf-head"><b>Every timeframe</b><span className={`badge ${mtf.alignment > 0.15 ? "up" : mtf.alignment < -0.15 ? "down" : "warn"}`}>{mtf.word}</span></div>
-      <table>
-        <tbody>
-          {mtf.rows.map((r) => (
-            <tr key={r.tf} className={r.current ? "cur" : ""}>
-              <td className="num"><b>{r.tf}</b></td>
-              <td className={r.trend > 0 ? "up" : r.trend < 0 ? "down" : "faint"}>{r.trend > 0 ? "▲ up" : r.trend < 0 ? "▼ down" : "– unclear"}</td>
-              <td className="faint">{r.zone}</td>
-              <td className="faint">{r.last_event ? `${r.last_event.kind} ${r.last_event.direction === "bullish" ? "↑" : "↓"} ${r.last_event.bars_ago}c` : ""}</td>
-              <td>{(r.signals || []).map((x) => <span key={x.id} className={`sig ${x.dir > 0 ? "up" : "down"}`} title={x.name}>{x.dir > 0 ? "B" : "S"}</span>)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      <div className="hint">{mtf.text} B/S = one of your strategies signals a buy/sell on that timeframe.</div>
-    </div>
+    <details className="ax-more-item" open={open || undefined} data-tour={tour}>
+      <summary><span className="grow">{title}</span>{hint ? <span className="ax-more-hint">{hint}</span> : null}<Icon name="chevronDown" size={15} /></summary>
+      <div className="ax-more-body">{children}</div>
+    </details>
   );
 }
 
-function Strategies({ sb, onChange }) {
-  if (!sb) return null;
-  if (sb.mode !== "chosen") {
+/** The best entry, first and large: side, entry, stop, targets (each one tap to copy), the tested odds, the grade,
+ *  the target style, and what to do with it. */
+function EntryHero({ res, hud, dec, symbol, tf, toast, onEdit, onAlert, onAsk, onTargetMode, busy, showLevels }) {
+  const { settings } = useAuth();
+  const p = res.plan;
+  const v = res.verdict || {};
+  const targetMode = res.target_mode || settings.analysis.targetMode || "liquidity";
+  if (!p) {
     return (
-      <button className="strat-strip" onClick={onChange}>
-        <Icon name="target" size={15} /> <span className="grow">The analyst's own mix. <b>Pick your strategies</b></span><Icon name="chevronRight" size={15} />
-      </button>
+      <section className="ax-hero none" data-tour="verdict">
+        <div className="axh-top"><span className="axh-kind">No setup</span><span className="axh-meta">{res.symbol} · {res.tf}</span></div>
+        <div className="axh-side">Nothing to take here</div>
+        <p className="axh-sub">{v.headline}</p>
+      </section>
     );
   }
+  const long = p.side === "long";
+  const state = hud ? hud.state : v.trade ? "go" : "best";
+  const rows = [["EP", "Entry", p.entry, "ep", -1], ["SL", "Stop loss", p.sl, "sl", -1], ...(p.tps || []).slice(0, 3).map((t, i) => [`TP${i + 1}`, `Take profit ${i + 1}`, t, "tp", i])];
+  const all = `${symbol} ${tf} ${long ? "BUY" : "SELL"} ${String(p.type || "").toUpperCase()}\n` + rows.map(([k, , val]) => `${k} ${fmtPrice(val, dec)}`).join("\n");
+  const p1 = (p.p_tp || [])[0];
+  const be1 = (p.breakeven || [])[0];
   return (
-    <details className="fold" open>
-      <summary>Your strategies <span className="faint">{sb.items.length}</span></summary>
-      <div className="stack" style={{ gap: 8 }}>
-        {sb.items.map((x) => {
-          const r = x.record || {};
-          return (
-            <div key={x.id} className="strat-item">
-              <div className="row">
-                <b className="grow">{x.name}</b>
-                {x.signal ? <span className={`badge ${x.signal === "long" || x.signal === "up" ? "up" : "down"}`}>{x.signal === "long" ? "buy now" : x.signal === "short" ? "sell now" : x.signal.toUpperCase()}{x.age ? ` · ${x.age}c ago` : ""}</span>
-                  : x.missed ? <span className="badge warn">missed · ran {x.missed.age}c ago</span> : <span className="badge">waiting</span>}
-              </div>
-              <div className="hint">{x.signal ? "" : `Waiting for ${x.wait_for}.`}{!x.suits_tf ? " Usually used on other timeframes." : ""}{!x.suits_market ? " Not its usual market." : ""}</div>
-              {r.trades ? (
-                <div className="hint num">On this chart: {r.trades} trades · {Math.round((r.win_rate || 0) * 100)}% won · {r.breakeven ? `${Math.round(r.breakeven * 100)}% needed` : `${r.avg_r >= 0 ? "+" : ""}${Number(r.avg_r || 0).toFixed(2)}R avg`} · {r.verdict}</div>
-              ) : <div className="hint">{r.verdict || "No trades on the loaded candles."}</div>}
-              {x.history ? (
-                <div className="hint num">Years of history on markets like this: {x.history.trades.toLocaleString()} trades · {Math.round(x.history.win_rate * 100)}% won · {x.history.avg_r >= 0 ? "+" : ""}{Number(x.history.avg_r).toFixed(2)}R avg</div>
-              ) : null}
-              {x.head ? <div className="hint num">This signal: about {Math.round(x.head.p_win * 100)}% chance of profit (needs {Math.round(x.head.needed * 100)}%).</div> : null}
-            </div>
-          );
-        })}
-        <button className="btn sm" onClick={onChange}><Icon name="sliders" size={14} /> Change strategies</button>
+    <section className={`ax-hero ${long ? "long" : "short"} st-${state}`} data-tour="verdict">
+      <div className="axh-top">
+        <span className="axh-kind">{state === "go" ? "Trade setup" : "Best entry"}</span>
+        <span className="axh-meta">{res.symbol} · {res.tf} · {fmtPrice(res.price, dec)}</span>
+        {showLevels ? <span className={`grade ${gradeClass(v.grade)}`} title="Grade: how many of the analyst's checks line up, capped by its confidence">{v.grade}</span> : null}
       </div>
-    </details>
-  );
-}
-
-function HowToEnter({ steps }) {
-  if (!steps || !steps.length) return null;
-  return (
-    <details className="fold" open data-tour="howto">
-      <summary>How to take this trade</summary>
-      <ol className="howto">
-        {steps.map((s, i) => <li key={i}>{s}</li>)}
-      </ol>
-    </details>
-  );
-}
-
-function Liquidity({ liq, dec }) {
-  if (!liq) return null;
-  return (
-    <details className="fold" open={!!liq.learned}>
-      <summary>Liquidity <span className="faint">{liq.draw ? `drawn ${liq.draw}` : ""}</span></summary>
-      <div className="stack" style={{ gap: 8, fontSize: "0.85rem" }}>
-        <div className="muted">{liq.text}</div>
-        {liq.learned && liq.pools && liq.pools.length ? (
-          <table className="liq-table">
-            <thead><tr><th>Pool</th><th className="r">Taken in 24c</th><th className="r">Then reversed</th></tr></thead>
-            <tbody>
-              {liq.pools.slice(0, 8).map((p, i) => (
-                <tr key={i}>
-                  <td><span className={`num ${p.side === "above" ? "down" : "up"}`}>{fmtPrice(p.price, dec)}</span> <span className="faint">{p.kind} · {p.d_atr} ATR</span></td>
-                  <td className="r num"><span className="liq-bar" style={{ "--p": `${Math.round(p.p_sweep * 100)}%` }} />{Math.round(p.p_sweep * 100)}%</td>
-                  <td className="r num">{p.p_reverse !== null && p.p_reverse !== undefined ? `${Math.round(p.p_reverse * 100)}%` : "–"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        ) : (
-          <div className="grid-2">
-            <div><div className="faint" style={{ fontSize: "0.76rem" }}>Buy-side (above)</div>{(liq.above || []).map((x) => <div key={x} className="num down">{fmtPrice(x, dec)}</div>)}</div>
-            <div><div className="faint" style={{ fontSize: "0.76rem" }}>Sell-side (below)</div>{(liq.below || []).map((x) => <div key={x} className="num up">{fmtPrice(x, dec)}</div>)}</div>
+      <div className="axh-main">
+        <b className="axh-side">{long ? "Buy" : "Sell"} {p.type === "market" ? "now" : p.type}</b>
+        {showLevels ? <span className="axh-price num">{fmtPrice(p.entry, dec)}</span> : null}
+      </div>
+      <div className="axh-sub">{p.strategy_name ? <b>{p.strategy_name}</b> : null}{p.strategy_name ? " · " : ""}{p.setup}</div>
+      <div className="axh-tags">
+        <Confidence c={v.confidence} />
+        {state === "best" ? <span className="axh-tag">Not confirmed: smaller size</span> : null}
+        {v.news_warning ? <span className="axh-tag bad">News soon</span> : null}
+      </div>
+      {res.fallback_note ? <div className="axh-note"><Icon name="info" size={14} /> <span>{res.fallback_note}</span></div> : null}
+      {showLevels ? (
+        <>
+          <div className="axh-levels" data-tour="levels">
+            {rows.map(([k, label, val, cls, i]) => (
+              <button key={k} className={`axh-lv ${cls}`} onClick={() => copyText(fmtPrice(val, dec).replace(/,/g, ""), toast, `${k} ${fmtPrice(val, dec)}`)} title={`Copy ${label}`}>
+                <span className="k">{k}</span>
+                <span className="v num">{fmtPrice(val, dec)}</span>
+                <span className="m num">{cls === "tp" ? `${Number((p.rr || [])[i] || 0).toFixed(1)}R · ${pctOf((p.p_tp || [])[i])}` : cls === "sl" ? `${(Math.abs(p.entry - p.sl) / (p.entry || 1) * 100).toFixed(2)}% away` : p.type}</span>
+              </button>
+            ))}
           </div>
-        )}
-        {liq.learned ? <div className="hint">Odds learned from years of markets: how often pools like these were taken within 24 candles, and how often price turned back after the sweep. Estimates, not promises.</div> : null}
+          {Number.isFinite(p1) ? (
+            <div className="axh-odds">
+              <div className="row" style={{ justifyContent: "space-between" }}>
+                <span>TP1 before the stop</span>
+                <b className={`num ${Number.isFinite(be1) && p1 >= be1 ? "up" : "down"}`}>{pctOf(p1)}<span className="faint"> · needs {pctOf(be1)}</span></b>
+              </div>
+              <div className="prob-bar"><i style={{ width: `${Math.max(2, Math.min(100, p1 * 100))}%` }} />{Number.isFinite(be1) ? <b style={{ left: `${Math.min(99, be1 * 100)}%` }} /> : null}</div>
+            </div>
+          ) : null}
+          <div className="axh-target" role="group" aria-label="Target style">
+            <span>Targets</span>
+            <div className="seg">
+              <button className={targetMode !== "winrate" ? "on" : ""} disabled={busy} onClick={() => targetMode !== "liquidity" && onTargetMode("liquidity")} title="TP1 at the first liquidity level: bigger wins, fewer of them">At liquidity</button>
+              <button className={targetMode === "winrate" ? "on" : ""} disabled={busy} onClick={() => targetMode !== "winrate" && onTargetMode("winrate")} title="TP1 where about 68% of similar setups got before the stop; the liquidity level stays as TP2">Higher win rate</button>
+            </div>
+          </div>
+        </>
+      ) : null}
+      <div className="axh-actions">
+        {onAlert && showLevels ? <button className="btn sm primary" onClick={() => onAlert(p)}><Icon name="bell" size={14} /> Alert me</button> : null}
+        {onEdit ? <button className="btn sm" onClick={() => onEdit(p)} title="Edit this analysis in My analysis, with all its drawings"><Icon name="pen" size={14} /> Edit</button> : null}
+        {showLevels ? <button className="btn sm" onClick={() => copyText(all, toast, "The plan")}><Icon name="copy" size={14} /> Copy</button> : null}
+        <button className="btn sm ghost" onClick={() => onAsk(`Explain this ${res.symbol} ${res.tf} analysis to me. Why ${v.action}?`)}><Icon name="sparkles" size={14} /> Ask why</button>
       </div>
-    </details>
+    </section>
   );
 }
 
-/** The reasons the chart shows (the glass HUD), in the panel: the switch, what has to happen first, what is against
- *  the idea and what is already in place, and an alert on the first level that has to happen. */
-function HudReasons({ res, dec, symbol, tf }) {
+/** Why the entry isn't confirmed (or what to be careful of): the same numbered flags as the chart, what would make
+ *  it safer, what is already in place, and every check behind the grade. */
+function Reasons({ res, hud, dec, symbol, tf }) {
   const { settings, updateSettings } = useAuth();
-  const hud = hudOf(res);
   if (!hud) return null;
   const on = settings.analysis.hud !== false;
   const flags = (hud.flags || []).filter((f) => f.n);
+  const good = (hud.flags || []).filter((f) => f.tone === "good");
   const steps = hud.steps || [];
   const toneOf = (n) => (flags.find((f) => f.n === n) || {}).tone || "wait";
-  const against = flags.filter((f) => !f.need);
-  const good = (hud.flags || []).filter((f) => f.tone === "good");
+  const nOf = (key) => (flags.find((f) => f.key === key) || {}).n;
+  const checks = hud.checks || [];
   const lvl = flags.find((f) => f.need && Number.isFinite(f.price));
-  const cap = (x) => (x ? x[0].toUpperCase() + x.slice(1) : x);
+  const title = hud.state === "go" ? "Before you enter" : hud.state === "dont" ? "On the chart" : "Why it isn't confirmed";
   return (
-    <div className="card hud-panel">
-      <label className="row ap-toggle">
-        <span className="grow"><b>Show the reasons on the chart</b><small>Numbered flags on the levels, the scenario and every check</small></span>
-        <button className={`switch-ui${on ? " on" : ""}`} aria-pressed={on} onClick={() => updateSettings({ analysis: { hud: !on } })} />
-      </label>
+    <section className="ax-card">
+      <header className="ax-h">
+        <b>{title}</b>
+        {hud.total ? <span className="ax-count">{hud.met}/{hud.total} checks</span> : null}
+        <label className="ax-switch" title="Show these reasons on the chart">
+          <span>On chart</span>
+          <button className={`switch-ui${on ? " on" : ""}`} aria-pressed={on} aria-label="Show the reasons on the chart" onClick={() => updateSettings({ analysis: { hud: !on } })} />
+        </label>
+      </header>
+      {flags.length ? (
+        <ol className="ax-reasons">
+          {flags.map((f) => (
+            <li key={f.n}>
+              <i className={`hud-n ${f.tone}`}>{f.n}</i>
+              <div><b>{f.title}</b><p>{f.text}</p></div>
+            </li>
+          ))}
+        </ol>
+      ) : <p className="ax-empty">Nothing against it on this chart.</p>}
       {steps.length ? (
-        <>
-          <div className="hp-sub">{hud.state === "go" ? "Before you enter" : "What has to happen first"}</div>
-          <ol className="hp-list">
-            {steps.map((s0) => <li key={s0.n}><i className={`hud-n ${toneOf(s0.n)}`}>{s0.n}</i><span>{cap(s0.text)}</span></li>)}
-          </ol>
-        </>
+        <div className="ax-safer">
+          <span className="ax-safer-h">{hud.state === "go" ? "Better still, wait for" : "Safer: wait for"}</span>
+          {steps.map((s0) => <span key={s0.n} className="ax-step"><i className={`hud-n ${toneOf(s0.n)}`}>{s0.n}</i>{s0.text}</span>)}
+        </div>
       ) : null}
-      {against.length ? (
-        <>
-          <div className="hp-sub">{hud.state === "dont" ? "On the chart" : steps.length ? "Also against it" : "Why there's no entry"}</div>
-          <ul className="hp-list">
-            {against.map((f) => <li key={f.n}><i className={`hud-n ${f.tone}`}>{f.n}</i><span><b>{f.title}.</b> <span className="muted">{f.text}</span></span></li>)}
+      {good.length ? <div className="ax-good">{good.map((g) => <span key={g.key}><b>✓</b> {g.title}</span>)}</div> : null}
+      {checks.length ? (
+        <details className="ax-checks">
+          <summary>Every check behind the grade</summary>
+          <ul>
+            {[...checks.filter((c) => !c.ok), ...checks.filter((c) => c.ok)].map((c, i) => {
+              const n = !c.ok ? nOf(c.key) : null;
+              return (
+                <li key={i} className={c.ok ? "ok" : "no"}>
+                  {c.ok ? <span className="ic">✓</span> : n ? <i className={`hud-n ${toneOf(n)}`}>{n}</i> : <span className="ic">×</span>}
+                  <span>{cap(c.text)}</span>
+                </li>
+              );
+            })}
           </ul>
-        </>
-      ) : null}
-      {good.length ? (
-        <>
-          <div className="hp-sub">Already in place</div>
-          <ul className="hp-list">{good.map((f) => <li key={f.key} className="good"><span className="ok">✓</span><span>{f.title}</span></li>)}</ul>
-        </>
+        </details>
       ) : null}
       {lvl && symbol ? (
-        <button className="btn sm primary block" style={{ marginTop: 12 }}
+        <button className="btn sm block" style={{ marginTop: 10 }}
           onClick={() => requestAlert({ symbol, tf, price: Number(Number(lvl.price).toFixed(dec)), op: lvl.price > res.price ? "above" : "below", note: lvl.title })}>
           <Icon name="bell" size={14} /> Alert me when {fmtPrice(lvl.price, dec)} is {lvl.key === "structure" ? "broken" : "reached"}
         </button>
       ) : null}
+    </section>
+  );
+}
+
+function TfRow({ r, best, dec, onTf }) {
+  const isBest = !!(best && best.tf === r.tf);
+  const [open, setOpen] = useState(isBest);
+  const sc = r.scan || {};
+  const b = sc.best;
+  const mine = sc.mine || [];
+  return (
+    <li className={`ax-tf${isBest ? " best" : ""}${r.current ? " cur" : ""}${open ? " open" : ""}`}>
+      <button className="ax-tf-row" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <b className="tf num">{r.tf}</b>
+        <span className={`tr ${r.trend > 0 ? "up" : r.trend < 0 ? "down" : ""}`} title={`Trend ${r.trend_word}`}>{r.trend > 0 ? "▲" : r.trend < 0 ? "▼" : "–"}</span>
+        <span className="what">{b ? <><em className={b.side === "long" ? "up" : "down"}>{b.side === "long" ? "Buy" : "Sell"}</em> {b.name}</> : <span className="faint">No setup</span>}</span>
+        {isBest ? <span className="ax-pill best">Best case</span> : r.current ? <span className="ax-pill">This chart</span> : null}
+        {b ? <span className={`gchip g-${b.grade}`}>{b.grade}</span> : null}
+        <Icon name="chevronDown" size={14} />
+      </button>
+      {open ? (
+        <div className="ax-tf-body">
+          {b ? (
+            <div className="ax-tf-levels num">
+              <span><i>EP</i>{fmtPrice(b.entry, dec)}</span><span><i>SL</i>{fmtPrice(b.sl, dec)}</span><span><i>TP</i>{fmtPrice(b.tp, dec)}</span><span><i>R</i>{Number(b.rr).toFixed(1)}</span>
+            </div>
+          ) : <div className="ax-tf-why">{sc.why || "No live setup on this timeframe."}</div>}
+          {b ? <div className="ax-tf-why">{b.type === "market" ? "At market" : "Limit, wait for the return"}{b.age ? ` · signal ${b.age} candle${b.age > 1 ? "s" : ""} ago` : " · signal on the last candle"}{b.why && b.why.length ? ` · ${b.why.join(" · ")}` : ""}</div> : null}
+          {sc.others && sc.others.length ? <div className="ax-tf-why">Also live: {sc.others.map((o) => `${o.name} (${o.side === "long" ? "buy" : "sell"}, ${o.grade})`).join(", ")}</div> : null}
+          {mine.length ? (
+            <ul className="ax-mine">
+              {mine.map((m) => <li key={m.id} className={m.status}><b>{m.name}</b> {m.text}</li>)}
+            </ul>
+          ) : null}
+          {!r.current && onTf ? <button className="btn sm" onClick={() => onTf(r.tf)}>Open the {r.tf} chart</button> : null}
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+/** Every timeframe: the best live setup on each (from every strategy), what your strategies are doing there, and
+ *  the best case across all of them. */
+function Timeframes({ mtf, dec, onTf }) {
+  if (!mtf || !mtf.rows || !mtf.rows.length) return null;
+  const best = mtf.best;
+  return (
+    <section className="ax-card" data-tour="mtf">
+      <header className="ax-h">
+        <b>Every timeframe</b>
+        <span className={`badge ${mtf.alignment > 0.15 ? "up" : mtf.alignment < -0.15 ? "down" : "warn"}`}>{mtf.word}</span>
+      </header>
+      {best ? (
+        <div className="ax-bestcase">
+          <span className="faint">Best case</span>
+          <b><span className="num">{best.tf}</span> · <em className={best.side === "long" ? "up" : "down"}>{best.side === "long" ? "Buy" : "Sell"}</em> {best.type === "market" ? "now" : "limit"} <span className="num">{fmtPrice(best.entry, dec)}</span></b>
+          <span className="faint">{best.name} · grade {best.grade}</span>
+        </div>
+      ) : null}
+      <ul className="ax-tfs">{mtf.rows.map((r) => <TfRow key={r.tf} r={r} best={best} dec={dec} onTf={onTf} />)}</ul>
+      <p className="ax-foot-note">{mtf.text} Grades here are quick checks (trend on that timeframe and the two above, room to target, a fresh signal); the main entry has the full analysis.</p>
+    </section>
+  );
+}
+
+function LiquidityBody({ liq, dec }) {
+  return (
+    <div className="stack" style={{ gap: 8, fontSize: "0.85rem" }}>
+      <div className="muted">{liq.text}</div>
+      {liq.learned && liq.pools && liq.pools.length ? (
+        <table className="liq-table">
+          <thead><tr><th>Pool</th><th className="r">Taken in 24c</th><th className="r">Then reversed</th></tr></thead>
+          <tbody>
+            {liq.pools.slice(0, 8).map((p, i) => (
+              <tr key={i}>
+                <td><span className={`num ${p.side === "above" ? "down" : "up"}`}>{fmtPrice(p.price, dec)}</span> <span className="faint">{p.kind} · {p.d_atr} ATR</span></td>
+                <td className="r num"><span className="liq-bar" style={{ "--p": `${Math.round(p.p_sweep * 100)}%` }} />{Math.round(p.p_sweep * 100)}%</td>
+                <td className="r num">{p.p_reverse !== null && p.p_reverse !== undefined ? `${Math.round(p.p_reverse * 100)}%` : "–"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <div className="grid-2">
+          <div><div className="faint" style={{ fontSize: "0.76rem" }}>Buy-side (above)</div>{(liq.above || []).map((x) => <div key={x} className="num down">{fmtPrice(x, dec)}</div>)}</div>
+          <div><div className="faint" style={{ fontSize: "0.76rem" }}>Sell-side (below)</div>{(liq.below || []).map((x) => <div key={x} className="num up">{fmtPrice(x, dec)}</div>)}</div>
+        </div>
+      )}
+      {liq.learned ? <div className="hint">Odds learned from years of markets: how often pools like these were taken within 24 candles, and how often price turned back after the sweep. Estimates, not promises.</div> : null}
     </div>
   );
 }
 
-export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk, onClean, onUpgrade, hiddenLayers, toggleLayer, layers, showAlt, setShowAlt, stale, symbolLabel, tf, symbol, onEditPlan, onStrategies }) {
+function StrategiesBody({ sb, onChange }) {
+  if (!sb || sb.mode !== "chosen") {
+    return (
+      <div className="stack" style={{ gap: 8 }}>
+        <div className="hint">The analyst uses its own mix of setups. Pick strategies and it reads the chart with them, and still gives the best entry when they have none.</div>
+        <button className="btn sm" onClick={onChange}><Icon name="target" size={14} /> Pick your strategies</button>
+      </div>
+    );
+  }
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      {sb.items.map((x) => {
+        const r = x.record || {};
+        return (
+          <div key={x.id} className="strat-item">
+            <div className="row">
+              <b className="grow">{x.name}</b>
+              {x.signal ? <span className={`badge ${x.signal === "long" || x.signal === "up" ? "up" : "down"}`}>{x.signal === "long" ? "buy now" : x.signal === "short" ? "sell now" : x.signal.toUpperCase()}{x.age ? ` · ${x.age}c ago` : ""}</span>
+                : x.missed ? <span className="badge warn">missed · ran {x.missed.age}c ago</span> : <span className="badge">waiting</span>}
+            </div>
+            <div className="hint">{x.signal ? "" : `Waiting for ${x.wait_for}.`}{!x.suits_tf ? " Usually used on other timeframes." : ""}{!x.suits_market ? " Not its usual market." : ""}</div>
+            {r.trades ? (
+              <div className="hint num">On this chart: {r.trades} trades · {Math.round((r.win_rate || 0) * 100)}% won · {r.breakeven ? `${Math.round(r.breakeven * 100)}% needed` : `${r.avg_r >= 0 ? "+" : ""}${Number(r.avg_r || 0).toFixed(2)}R avg`} · {r.verdict}</div>
+            ) : <div className="hint">{r.verdict || "No trades on the loaded candles."}</div>}
+            {x.history ? (
+              <div className="hint num">Years of history on markets like this: {x.history.trades.toLocaleString()} trades · {Math.round(x.history.win_rate * 100)}% won · {x.history.avg_r >= 0 ? "+" : ""}{Number(x.history.avg_r).toFixed(2)}R avg</div>
+            ) : null}
+            {x.head ? <div className="hint num">This signal: about {Math.round(x.head.p_win * 100)}% chance of profit (needs {Math.round(x.head.needed * 100)}%).</div> : null}
+          </div>
+        );
+      })}
+      <button className="btn sm" onClick={onChange}><Icon name="sliders" size={14} /> Change strategies</button>
+    </div>
+  );
+}
+
+export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk, onClean, onUpgrade, hiddenLayers, toggleLayer, layers, showAlt, setShowAlt, stale, symbolLabel, tf, symbol, onEditPlan, onStrategies, onTf, onFull }) {
   const { settings, updateSettings, can, user, toast } = useAuth();
   const showLevels = settings.analysis.showLevels !== false;
   if (busy && !res) {
@@ -473,7 +599,7 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
         <div className="ready">
           <span className="ready-ic"><Icon name="zap" size={24} /></span>
           <h3>Read {symbolLabel} on {TF_LABEL[tf] || tf}</h3>
-          <p className="muted">The analyst marks structure and liquidity, checks every timeframe and the news, then gives a careful scenario{showLevels ? " with entry, stop and targets" : ""} for {mine.length ? `your ${mine.length} strateg${mine.length > 1 ? "ies" : "y"}` : "its own mix of setups"}.</p>
+          <p className="muted">The analyst marks structure and liquidity, checks every timeframe and the news, then gives the best entry{showLevels ? " with stop and targets" : ""} from {mine.length ? `your ${mine.length} strateg${mine.length > 1 ? "ies" : "y"} (or its own setups when they have none)` : "its own mix of setups"}.</p>
           <button className="btn primary block lg" onClick={onAnalyse}><Icon name="zap" size={18} /> Analyse {symbolLabel}</button>
           <button className="btn ghost block sm" onClick={onStrategies} style={{ marginTop: 8 }}><Icon name="target" size={14} /> {mine.length ? "Change strategies" : "Pick strategies first"}</button>
           <div className="hint" style={{ marginTop: 6 }}>Draw your own levels first if you want the analyst to check them.</div>
@@ -488,113 +614,62 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
     );
   }
   const v = res.verdict || {};
-  const tone = verdictTone(v);
   const dec = res.decimals;
   const isCrypto = res.asset_class === "crypto";
+  const hud = hudOf(res);
   const planAlert = (p) => {
     const j = Math.min(1, (p.tps || []).length - 1);
     requestAlert({ symbol, tf, decimals: dec, plan: { side: p.side, entry: p.entry, sl: p.sl, tp: (p.tps || [])[j] } });
   };
   const model = res.model || {};
   const conflict = v.conflict || (res.strategies && res.strategies.conflict);
+  const setTargetMode = (m) => {
+    updateSettings({ analysis: { targetMode: m } });
+    onAnalyse({ targetMode: m });
+  };
+  const nw = res.news;
+  const sz = res.plan && res.plan.sizing;
   return (
-    <div className="stack ap" style={{ gap: 12 }}>
+    <div className="ap ax">
       {stale ? (
-        <button className="badge brand" onClick={onAnalyse} style={{ height: 30, cursor: "pointer", justifyContent: "center" }}>
-          <Icon name="refresh" size={14} /> A new candle closed: analyse again
-        </button>
+        <button className="ax-stale" onClick={onAnalyse}><Icon name="refresh" size={14} /> A new candle closed: analyse again</button>
       ) : null}
-      <div className={`verdict ${tone}`} data-tour="verdict">
-        <div className="row" style={{ alignItems: "flex-start" }}>
-          <div className="grow">
-            <div className="faint" style={{ fontSize: "0.76rem", fontWeight: 700 }}>{res.symbol} · {res.tf} · {fmtPrice(res.price, dec)}</div>
-            <div className="act" style={{ color: tone === "buy" ? "var(--act-buy)" : tone === "sell" ? "var(--act-sell)" : "var(--act-wait)" }}>
-              {showLevels ? v.action : (v.side === "long" ? "Leaning up" : v.side === "short" ? "Leaning down" : "No clear edge")}
-            </div>
-          </div>
-          {showLevels ? <span className={`grade ${gradeClass(v.grade)}`}>{v.grade}</span> : null}
-        </div>
-        <div className="row wrap" style={{ gap: 6, marginTop: 6 }}><Confidence c={v.confidence} /></div>
-        <div style={{ fontSize: "0.88rem", marginTop: 6 }} className="muted">{v.headline}</div>
-        {v.confidence && v.confidence.reasons && v.confidence.reasons.length ? (
-          <ul className="conf-why">{v.confidence.reasons.slice(0, 4).map((r, i) => <li key={i}>{r}</li>)}</ul>
+      <EntryHero res={res} hud={hud} dec={dec} symbol={res.symbol || symbol} tf={res.tf} toast={toast} busy={busy} showLevels={showLevels}
+        onEdit={onEditPlan || null} onAlert={symbol ? planAlert : null} onAsk={onAsk} onTargetMode={setTargetMode} />
+      {res.fixed_time && settings.analysis.fixedTime ? <FixedTime ft={res.fixed_time} /> : null}
+      {conflict && conflict.buyers && conflict.sellers && conflict.buyers.length && conflict.sellers.length ? (
+        <div className="ax-flag warn"><Icon name="alert" size={14} /> {conflict.note}</div>
+      ) : null}
+      <Reasons res={res} hud={hud} dec={dec} symbol={symbol} tf={tf} />
+      <Timeframes mtf={res.mtf} dec={dec} onTf={onTf} />
+      {res.fixed_time && !settings.analysis.fixedTime ? <FixedTime ft={res.fixed_time} /> : null}
+
+      <section className="ax-more">
+        <div className="ax-more-h">More detail</div>
+        {showLevels && res.how_to_enter && res.how_to_enter.length ? (
+          <More title="How to take this trade" hint={`${res.how_to_enter.length} steps`} tour="howto">
+            <ol className="howto">{res.how_to_enter.map((s0, i) => <li key={i}>{s0}</li>)}</ol>
+          </More>
         ) : null}
-        {conflict && conflict.buyers && conflict.sellers && conflict.buyers.length && conflict.sellers.length ? (
-          <div className="lc-note warn" style={{ marginTop: 8 }}><Icon name="alert" size={14} /> {conflict.note}</div>
+        {showLevels && res.plan ? (
+          <More title="Odds, size & leverage" hint={sz ? `${fmtMoney(sz.risk_amount)} risk` : null}>
+            <PlanCard p={res.plan} dec={dec} isCrypto={isCrypto} title={v.trade ? "The plan" : "Best entry"} onAlert={null} onEdit={null} />
+          </More>
         ) : null}
-        {v.news_warning ? (
-          <div className="lc-note down" style={{ marginTop: 8 }}><Icon name="alert" size={14} /> {v.news_warning}</div>
+        {res.liquidity ? <More title="Liquidity" hint={res.liquidity.draw ? `drawn ${res.liquidity.draw}` : null}><LiquidityBody liq={res.liquidity} dec={dec} /></More> : null}
+        {res.probabilities ? (
+          <More title="Which way next" hint="next 24 candles" tour="direction">
+            <DirectionBar probs={res.probabilities} decimals={dec} trained={model.trained !== false} />
+          </More>
         ) : null}
-        {v.tf_note ? <div className="tf-note">{v.tf_note}</div> : null}
-        <div className="row wrap" style={{ marginTop: 12, gap: 8 }}>
-          <button className="btn sm primary" onClick={() => onAsk(`Explain this ${res.symbol} ${res.tf} analysis to me. Why ${v.action}?`)}>
-            <Icon name="sparkles" size={15} /> Ask StreixAI why
-          </button>
-          <button className="btn sm" onClick={onAnalyse} disabled={busy}><Icon name="refresh" size={15} /> {busy ? "Analysing…" : "Refresh"}</button>
-          {onClean ? <button className="btn sm" onClick={onClean} title="Remove this analysis from the chart"><Icon name="trash" size={15} /> Clean</button> : null}
-        </div>
-      </div>
-
-      <HudReasons res={res} dec={dec} symbol={symbol} tf={tf} />
-      {res.fixed_time ? <FixedTime ft={res.fixed_time} /> : null}
-      {showLevels && res.plan ? (
-        <LevelsCard p={res.plan} dec={dec} symbol={res.symbol} tf={res.tf} toast={toast} title={v.trade ? "The plan" : "If conditions improve"}
-          onEdit={onEditPlan ? (p) => onEditPlan(p) : null} onAlert={symbol ? planAlert : null} />
-      ) : null}
-      {showLevels ? <HowToEnter steps={res.how_to_enter} /> : null}
-      <Mtf mtf={res.mtf} />
-      <Strategies sb={res.strategies} onChange={onStrategies} />
-      <Liquidity liq={res.liquidity} dec={dec} />
-
-      {res.probabilities ? (
-        <div data-tour="direction">
-          <DirectionBar probs={res.probabilities} decimals={dec} trained={model.trained !== false} />
-        </div>
-      ) : null}
-      {showLevels && res.plan ? (
-        <details className="fold">
-          <summary>Odds, size & leverage</summary>
-          <div><PlanCard p={res.plan} dec={dec} isCrypto={isCrypto} title={v.trade ? "The plan" : "Conditional plan"} onAlert={null} onEdit={null} /></div>
-        </details>
-      ) : null}
-
-      {res.tendencies && res.tendencies.length ? (
-        <div className="card" style={{ padding: 14 }}>
-          <b style={{ fontSize: "0.92rem" }}>Your tendencies</b>
-          <div className="hint" style={{ margin: "4px 0 8px" }}>From your own replays, so the plan fits how you trade.</div>
-          {res.tendencies.map((t, i) => <div key={i} className="hint" style={{ lineHeight: 1.5, marginTop: i ? 8 : 0 }}>{t}</div>)}
-        </div>
-      ) : null}
-      {res.learning && res.learning.message ? (
-        <div className="card" style={{ padding: 14 }}>
-          <b style={{ fontSize: "0.92rem" }}>What the analyst&apos;s record says</b>
-          <div className="hint" style={{ margin: "4px 0 8px" }}>From {res.learning.settled} settled calls, live and replayed, checked on the candles that came after.</div>
-          <div className="hint" style={{ lineHeight: 1.5 }}>{res.learning.message}</div>
-        </div>
-      ) : null}
-      {res.plan && res.plan.checklist ? (
-        <details className="fold">
-          <summary>Why this grade <span className="faint num">{Number(res.plan.score).toFixed(1)}/10</span></summary>
-          <div>
-            <ul className="check-list">
-              {res.plan.checklist.map((c, i) => (
-                <li key={i} className={c.ok ? "ok" : "no"}><span className="ic">{c.ok ? "✓" : "✗"}</span><span>{c.text}</span></li>
-              ))}
-            </ul>
-            {res.plan.why && res.plan.why.length ? <div className="hint" style={{ marginTop: 10 }}>Setup: {res.plan.setup}. {res.plan.why.join("; ")}.</div> : null}
-          </div>
-        </details>
-      ) : null}
-
-      <details className="fold" open={!!(res.news && res.news.risk === "high")}>
-        <summary>News & calendar {res.news ? <span className={`badge ${res.news.risk === "high" ? "down" : res.news.risk === "medium" ? "warn" : "up"}`}>{res.news.risk} risk</span> : null}</summary>
-        <div><News news={res.news} /></div>
-      </details>
-
-      {res.levels && res.levels.length ? (
-        <details className="fold">
-          <summary>Key levels</summary>
-          <div style={{ padding: "4px 8px" }}>
+        <More title="Your strategies" hint={res.strategies && res.strategies.mode === "chosen" ? `${res.strategies.items.length} chosen` : "analyst's mix"}>
+          <StrategiesBody sb={res.strategies} onChange={onStrategies} />
+        </More>
+        <More title="News & calendar" hint={nw ? <span className={`badge ${nw.risk === "high" ? "down" : nw.risk === "medium" ? "warn" : "up"}`}>{nw.risk} risk</span> : null}>
+          <News news={nw} />
+        </More>
+        {res.levels && res.levels.length ? (
+          <More title="Key levels" hint={`${Math.min(14, res.levels.filter((c) => Math.abs(c.dist_atr) <= 8).length)} near price`}>
             <table className="levels-table">
               <tbody>
                 {[...res.levels].sort((a, b) => b.price - a.price).filter((c) => Math.abs(c.dist_atr) <= 8).slice(0, 14).map((c, i) => (
@@ -607,81 +682,88 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
               </tbody>
             </table>
             <div className="hint" style={{ padding: "6px 6px 2px" }}>% = chance price reaches the level within 24 candles.</div>
+          </More>
+        ) : null}
+        {res.user_drawings && res.user_drawings.length ? (
+          <More title="Your levels" hint={`${res.user_drawings.length}`} open>
+            <div className="stack" style={{ gap: 8, fontSize: "0.85rem" }}>
+              {res.user_drawings.map((u, i) => (
+                <div key={i}>
+                  <b>{u.label || u.type}</b>{" "}
+                  {u.error ? <span className="down">{u.error}</span> : (
+                    <span className="muted">
+                      {u.level !== undefined ? `${fmtPrice(u.level, dec)} (${u.role}, ${Math.abs(u.distance_atr || 0).toFixed(1)} ATR away)` : ""}
+                      {u.p_touch_24 !== undefined ? ` · ${fmtPct(u.p_touch_24)} chance to be reached` : ""}
+                      {u.tests ? ` · tested ${u.tests}× (held ${u.held}, broke ${u.broke})` : ""}
+                      {u.touches !== undefined ? ` · ${u.touches} touches, ${u.status}` : ""}
+                      {u.confluence && u.confluence.length ? ` · lines up with ${u.confluence.slice(0, 3).join(", ")}` : " · no other level agrees"}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </More>
+        ) : null}
+        {showLevels && res.alternative ? (
+          <More title="If it goes the other way" hint={`${res.alternative.side === "long" ? "buy" : "sell"} · grade ${res.alternative.grade}`}>
+            <PlanCard p={res.alternative} dec={dec} isCrypto={isCrypto} title="Alternative plan" dim onAlert={symbol ? (p) => planAlert(p) : null} onEdit={onEditPlan || null} />
+          </More>
+        ) : null}
+        {res.tendencies && res.tendencies.length ? (
+          <More title="Your tendencies" hint="from your replays">
+            {res.tendencies.map((t, i) => <div key={i} className="hint" style={{ lineHeight: 1.5, marginTop: i ? 8 : 0 }}>{t}</div>)}
+          </More>
+        ) : null}
+        {res.learning && res.learning.message ? (
+          <More title="What the analyst's record says" hint={`${res.learning.settled} calls`}>
+            <div className="hint" style={{ lineHeight: 1.5 }}>{res.learning.message}</div>
+          </More>
+        ) : null}
+        <More title="On the chart" hint={`${layers.length} layers`}>
+          <div className="stack" style={{ gap: 10 }}>
+            <div className="hint">{res.layers_scope ? "The chart shows what your strategies use. Tap any drawing on the chart to see why it's there; tap an EP, SL or TP label to copy it." : "Tap any drawing on the chart to see why it's there; tap an EP, SL or TP label to copy it."}</div>
+            {showLevels ? <label className="check"><input type="checkbox" checked={showAlt} onChange={(e) => setShowAlt(e.target.checked)} /> Show the alternative plan</label> : null}
+            <div className="grid-2" style={{ gap: 6 }}>
+              {layers.filter((l) => !res.layers_scope || res.layers_scope.includes(l.id) || l.id === "indicators").map((l) => (
+                <label key={l.id} className="check" style={{ fontSize: "0.84rem" }}>
+                  <input type="checkbox" checked={!hiddenLayers.has(l.id)} onChange={() => toggleLayer(l.id)} /> {LAYERS[l.id] || l.id}
+                </label>
+              ))}
+            </div>
           </div>
-        </details>
-      ) : null}
-
-      {res.user_drawings && res.user_drawings.length ? (
-        <details className="fold" open>
-          <summary>Your levels</summary>
-          <div className="stack" style={{ gap: 8, fontSize: "0.85rem" }}>
-            {res.user_drawings.map((u, i) => (
-              <div key={i}>
-                <b>{u.label || u.type}</b>{" "}
-                {u.error ? <span className="down">{u.error}</span> : (
-                  <span className="muted">
-                    {u.level !== undefined ? `${fmtPrice(u.level, dec)} (${u.role}, ${Math.abs(u.distance_atr || 0).toFixed(1)} ATR away)` : ""}
-                    {u.p_touch_24 !== undefined ? ` · ${fmtPct(u.p_touch_24)} chance to be reached` : ""}
-                    {u.tests ? ` · tested ${u.tests}× (held ${u.held}, broke ${u.broke})` : ""}
-                    {u.touches !== undefined ? ` · ${u.touches} touches, ${u.status}` : ""}
-                    {u.confluence && u.confluence.length ? ` · lines up with ${u.confluence.slice(0, 3).join(", ")}` : " · no other level agrees"}
-                  </span>
-                )}
-              </div>
-            ))}
+        </More>
+        <More title="How reliable is this?" hint={model.trained ? (model.edge_proven ? "edge proven" : "no proven edge") : "model not trained"}>
+          <div style={{ fontSize: "0.86rem" }} className="stack">
+            {model.trained ? (
+              <>
+                <div>Probabilities come from models trained on {model.rows && model.rows.race ? Number(model.rows.race).toLocaleString() : "many"} historical situations and tested on data they never saw.</div>
+                <div className="row wrap" style={{ gap: 6 }}>
+                  {model.direction_auc ? <span className="badge">Direction AUC {Number(model.direction_auc).toFixed(2)}</span> : null}
+                  {model.race_skill !== undefined ? <span className="badge">Target/stop skill {fmtPct(model.race_skill, 1)}</span> : null}
+                  <span className={`badge ${model.edge_proven ? "up" : "warn"}`}>{model.edge_proven ? "Edge proven in testing" : "No proven edge yet"}</span>
+                </div>
+                {!model.edge_proven ? (
+                  <div className="muted">The odds are calibrated, but testing hasn't proven that following every plan makes money after costs. Use the analysis to structure decisions and manage risk, not as a guarantee.</div>
+                ) : <div className="muted">Past test results don't guarantee future results. Keep risk small.</div>}
+              </>
+            ) : (
+              <div className="muted">The probability model isn't trained on this server yet, so the odds are rough estimates. The levels and structure are still computed from the chart.</div>
+            )}
+            <div className="hint">{res.disclaimer}</div>
+            <div className="hint">Data: {res.source} · analysed in {res.seconds}s · {fmtDateTime(res.now)}{user && user.role === "admin" && res.brain_status ? ` · brain: ${res.brain_status}` : ""}</div>
           </div>
-        </details>
-      ) : null}
+        </More>
+      </section>
 
-      {showLevels && res.alternative ? (
-        <details className="fold">
-          <summary>If it goes the other way</summary>
-          <div><PlanCard p={res.alternative} dec={dec} isCrypto={isCrypto} title="Alternative plan" dim onAlert={symbol ? (p) => planAlert(p) : null} onEdit={onEditPlan || null} /></div>
-        </details>
-      ) : null}
-
-      <details className="fold">
-        <summary>On the chart</summary>
-        <div className="stack" style={{ gap: 10 }}>
-          <div className="hint">{res.layers_scope ? "The chart shows what your strategies use. Tap any drawing on the chart to see why it's there; tap an EP, SL or TP label to copy it." : "Tap any drawing on the chart to see why it's there; tap an EP, SL or TP label to copy it."}</div>
-          {showLevels ? <label className="check"><input type="checkbox" checked={showAlt} onChange={(e) => setShowAlt(e.target.checked)} /> Show the alternative plan</label> : null}
-          <div className="grid-2" style={{ gap: 6 }}>
-            {layers.filter((l) => !res.layers_scope || res.layers_scope.includes(l.id) || l.id === "indicators").map((l) => (
-              <label key={l.id} className="check" style={{ fontSize: "0.84rem" }}>
-                <input type="checkbox" checked={!hiddenLayers.has(l.id)} onChange={() => toggleLayer(l.id)} /> {LAYERS[l.id] || l.id}
-              </label>
-            ))}
-          </div>
-        </div>
-      </details>
-
-      <details className="fold">
-        <summary>Full report</summary>
-        <div><Report res={res} can={can} onUpgrade={onUpgrade} /></div>
-      </details>
-
-      <details className="fold">
-        <summary>How reliable is this?</summary>
-        <div style={{ fontSize: "0.86rem" }} className="stack">
-          {model.trained ? (
-            <>
-              <div>Probabilities come from models trained on {model.rows && model.rows.race ? Number(model.rows.race).toLocaleString() : "many"} historical situations and tested on data they never saw.</div>
-              <div className="row wrap" style={{ gap: 6 }}>
-                {model.direction_auc ? <span className="badge">Direction AUC {Number(model.direction_auc).toFixed(2)}</span> : null}
-                {model.race_skill !== undefined ? <span className="badge">Target/stop skill {fmtPct(model.race_skill, 1)}</span> : null}
-                <span className={`badge ${model.edge_proven ? "up" : "warn"}`}>{model.edge_proven ? "Edge proven in testing" : "No proven edge yet"}</span>
-              </div>
-              {!model.edge_proven ? (
-                <div className="muted">The odds are calibrated, but testing hasn't proven that following every plan makes money after costs. Use the analysis to structure decisions and manage risk, not as a guarantee.</div>
-              ) : <div className="muted">Past test results don't guarantee future results. Keep risk small.</div>}
-            </>
-          ) : (
-            <div className="muted">The probability model isn't trained on this server yet, so the odds are rough estimates. The levels and structure are still computed from the chart.</div>
-          )}
-          <div className="hint">{res.disclaimer}</div>
-          <div className="hint">Data: {res.source} · analysed in {res.seconds}s · {fmtDateTime(res.now)}{user && user.role === "admin" && res.brain_status ? ` · brain: ${res.brain_status}` : ""}</div>
-        </div>
-      </details>
+      {onFull ? <button className="ax-read" onClick={onFull}><Icon name="book" size={16} /> <span className="grow">Read the full analysis</span><Icon name="chevronRight" size={16} /></button> : (
+        <More title="Full report"><Report res={res} can={can} onUpgrade={onUpgrade} /></More>
+      )}
+      <div className="ax-foot">
+        <button className="btn sm ghost" onClick={onAnalyse} disabled={busy}><Icon name="refresh" size={14} /> {busy ? "Analysing…" : "Refresh"}</button>
+        {onClean ? <button className="btn sm ghost" onClick={onClean} title="Remove this analysis from the chart"><Icon name="trash" size={14} /> Clean</button> : null}
+        <span className="grow" />
+        <span className="faint">{v.tf_note ? "Changes with every new candle" : ""}</span>
+      </div>
     </div>
   );
 }

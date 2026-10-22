@@ -1309,7 +1309,9 @@ def t_strategies(c):
     check(sb["mode"] == "chosen" and [x["id"] for x in sb["items"]] == ["ict_sweep_mss", "supertrend", "ft_trend"], sb)
     check(all("record" in x and "wait_for" in x for x in sb["items"]), sb["items"])
     for p_ in a["plans"]:
-        check(p_.get("strategy") in ("ict_sweep_mss", "supertrend"), p_.get("strategy"))
+        # the chosen strategies' plans, or (when they have none) the analyst's own, marked as the fallback
+        check(p_.get("strategy") in ("ict_sweep_mss", "supertrend") or (a["entry_source"] != "strategies" and p_.get("fallback")),
+              (p_.get("strategy"), a["entry_source"]))
     v = a["verdict"]
     check(v.get("confidence") and v["confidence"]["level"] in ("none", "low", "moderate", "good") and v.get("tf_note"), v)
     check("certain" not in v["headline"].lower() or "not a certainty" in v["headline"].lower(), v["headline"])
@@ -1571,8 +1573,21 @@ def t_hud(c):
     for sym, tf in (("EURUSD", "15m"), ("BTCUSDT", "1h"), ("ETHUSDT", "4h"), ("SOLUSDT", "15m")):
         a = c.post("/api/analysis/run", json=dict(symbol=sym, tf=tf), headers=H).json()
         h = a["hud"]
-        check("error" not in h and h["state"] in ("wait", "go", "dont") and h["title"] and h["summary"], h)
+        check("error" not in h and h["state"] in ("best", "go", "dont") and h["title"] and h["summary"], h)
         check(h["state"] != "go" or a["verdict"]["trade"], (h["state"], a["verdict"]))
+        # there is always an entry with a stop and targets, and the verdict leads with it
+        p = a["plan"]
+        check(p and p["entry"] and p["sl"] and p["tps"] and h["state"] != "dont", (a["verdict"], a["entry_source"]))
+        check(a["verdict"]["trade"] or a["verdict"]["action"].startswith("Best entry"), a["verdict"])
+        # every timeframe: a graded best setup or the reason there is none
+        rows = a["mtf"]["rows"]
+        check(rows and all("scan" in r for r in rows), [r.get("tf") for r in rows])
+        for r in rows:
+            b = r["scan"]["best"]
+            check((b is None and r["scan"]["why"]) or (b["grade"] in "ABCD" and (b["dir"] * (b["entry"] - b["sl"]) > 0)
+                                                        and b["dir"] * (b["tp"] - b["entry"]) > 0), r["scan"])
+        if a["mtf"]["best"]:
+            check(a["mtf"]["best"]["tf"] in [r["tf"] for r in rows], a["mtf"]["best"])
         flags = [f for f in h["flags"] if f["n"]]
         check([f["n"] for f in flags] == list(range(1, len(flags) + 1)) and len(flags) <= hm.MAX_FLAGS, flags)
         for f in h["flags"]:
@@ -1597,6 +1612,23 @@ def t_hud(c):
             again = hm.with_news(json.loads(json.dumps(h)), a["news"])
             check(sum(f["key"] == "news" for f in again["flags"]) == 1, "news added once")
     check(seen_news, "the fake calendar has a high-impact release")
+    # chosen strategies with no setup: the best entry still comes, from the analyst's own setups, said plainly
+    for sym in ("BTCUSDT", "ETHUSDT", "SOLUSDT"):
+        a = c.post("/api/analysis/run", json=dict(symbol=sym, tf="1h", strategies=["ict_sweep_mss"]), headers=H).json()
+        check(a["plan"] and a["entry_source"] in ("strategies", "analyst", "market"), a["entry_source"])
+        if a["entry_source"] != "strategies":
+            check("None of your strategies" in (a["fallback_note"] or "") or a["entry_source"] == "market", a["fallback_note"])
+            check(a["hud"]["note"] == a["fallback_note"], a["hud"].get("note"))
+            mine = [m for r in a["mtf"]["rows"] for m in r["scan"]["mine"]]
+            check(mine and all(m["id"] == "ict_sweep_mss" and m["text"] for m in mine), mine)
+    # win-rate targets: TP1 moves closer (where most similar setups got first), the liquidity target stays
+    liq = c.post("/api/analysis/run", json=dict(symbol="EURUSD", tf="15m"), headers=H).json()["plan"]
+    win = c.post("/api/analysis/run", json=dict(symbol="EURUSD", tf="15m", target_mode="winrate"), headers=H).json()
+    check(win["target_mode"] == "winrate" and win["plan"]["rr"][0] <= liq["rr"][0] + 1e-9, (win["plan"]["rr"], liq["rr"]))
+    if win["plan"]["rr"][0] < liq["rr"][0] - 1e-6:
+        check("win-rate target" in win["plan"]["tp_labels"][0] and win["plan"]["p_tp"][0] > liq["p_tp"][0], win["plan"])
+    check(c.post("/api/analysis/run", json=dict(symbol="EURUSD", tf="15m", target_mode="nope"), headers=H).status_code == 422,
+          "unknown target style")
     # no plan at all: Don't trade, with context flags and no path
     X = next(iter(ga._STATE["ctx"].values()))
     d = hm.build(X, None, dict(headline="No valid plan: wait for a break of structure."), None)

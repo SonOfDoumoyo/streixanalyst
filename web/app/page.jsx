@@ -145,11 +145,11 @@ export default function Landing() {
         <div className="container lp-split">
           <div>
             <p className="eyebrow">Odds</p>
-            <h2 className="lp-h2">We show the maths, including when it says don&apos;t trade</h2>
+            <h2 className="lp-h2">The best entry every time, with the maths behind it</h2>
             <p className="lp-body">
-              Every plan shows the chance that price reaches the target before the stop, next to the win rate you would need to break
-              even after costs. When the odds are not there, the verdict is <b>NO TRADE</b> with a conditional plan, because sitting out
-              is a position too. No guarantees, and no invented win rates.
+              Every analysis gives the best entry it can find, with stop and targets, and the chance that price reaches the target
+              before the stop next to the win rate you would need to break even after costs. When the odds are thin, it says
+              <b> not confirmed</b> and shows exactly why, so you can size down or wait. No guarantees, and no invented win rates.
             </p>
           </div>
           <div className="lp-example">

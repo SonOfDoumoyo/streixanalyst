@@ -318,11 +318,14 @@ def compose(hud):
     against = [x for x in flags if x["tone"] == "bad" and not x.get("need")]
     how = hud.get("how") or ""
     out = []
-    if hud.get("state") == "go":
+    if hud.get("state") in ("go", "best"):
         out.append(f"{how[:1].upper() + how[1:]}. {hud.get('levels_text') or ''}".strip())
-        if any(x["tone"] in ("bad", "wait") for x in flags):
-            out.append("Careful: " + "; ".join(f"({x['n']}) {_lower(x['title'])}"
-                                                for x in flags if x["tone"] in ("bad", "wait")) + ".")
+        cautions = [x for x in flags if x["tone"] in ("bad", "wait")]
+        if cautions:
+            out.append(("Careful: " if hud["state"] == "go" else "Not confirmed: ")
+                       + "; ".join(f"({x['n']}) {_lower(x['title'])}" for x in cautions) + ".")
+        if steps and hud["state"] == "best":
+            out.append("Safer: wait for " + ", then ".join(f"({s['n']}) {s['text']}" for s in steps) + ".")
         return " ".join(out)
     if steps:
         out.append("Waiting for " + ", then ".join(f"({s['n']}) {s['text']}" for s in steps) + ".")
@@ -347,16 +350,17 @@ def _build(X, p, verdict, now):
     v = verdict or {}
     now_s = _epoch(now) if now is not None else None
     split = isinstance(v.get("conflict"), dict) and v["conflict"].get("split")
-    if p is None or split:
+    if p is None:
         state = "dont"
     elif v.get("trade"):
         state = "go"
     else:
-        state = "wait"
+        state = "best"
     conf = (v.get("confidence") or {}).get("level")
     out = dict(state=state, confidence=conf, trend=_trend_rows(X), tf=X["tf"], atr=float(X["atr"]),
-               last_t=_last_t(X), step=int(md.TF_MIN[X["tf"]] * 60))
-    if p is None or split:
+               last_t=_last_t(X), step=int(md.TF_MIN[X["tf"]] * 60), note=X.get("fallback_note"),
+               grade=v.get("grade"))
+    if p is None:
         flags = []
         lm = X.get("liq_map") or {}
         if lm.get("draw_level") is not None:
@@ -374,7 +378,7 @@ def _build(X, p, verdict, now):
                               short=f"{e['kind']} at {f.p(e['level'])}",
                               text="Wait for a clear break of structure before looking for an entry."))
         flags = _number(flags, [])
-        out.update(title="Don't trade", sub="Your strategies disagree" if split else "No setup worth taking",
+        out.update(title="Don't trade", sub="No setup worth taking",
                    flags=flags, checks=[], steps=[], met=0, total=0, path=None, entry=None,
                    headline=v.get("headline"))
         out["summary"] = compose(out)
@@ -382,6 +386,9 @@ def _build(X, p, verdict, now):
     d = p["dir"]
     word = "buy" if d == 1 else "sell"
     flags, good = _flags_for_plan(X, p, now_s)
+    if split:
+        flags.insert(0, dict(key="conflict", tone="bad", kind="chip", price=None, t=None, title="Your strategies disagree",
+                             short="Strategies disagree", text=v["conflict"].get("note") or "Your strategies point both ways."))
     flags = flags[:MAX_FLAGS]
     allf = _number(flags, good[:MAX_GOOD])
     keys = {fl["key"] for fl in flags}
@@ -391,10 +398,11 @@ def _build(X, p, verdict, now):
         if not any(c["key"] == fl["key"] and not c["ok"] for c in checks):
             checks.insert(0, dict(ok=False, text=fl["title"], key=fl["key"]))
     steps = _steps(flags)
+    how_sub = "Now, at market" if p["type"] == "market" else f"{word.capitalize()} {p['type']} at {f.p(p['entry'])}"
     if state == "go":
-        title, sub = f"Possible {word}", "Now, at market" if p["type"] == "market" else f"{p['type'].capitalize()} at {f.p(p['entry'])}"
+        title, sub = f"Possible {word}", how_sub
     else:
-        title, sub = "Wait", "No entry yet"
+        title, sub = "Best entry", how_sub
     zone = p.get("zone")
     if not (isinstance(zone, (list, tuple)) and len(zone) == 2):
         zone = [p["entry"] - 0.12 * X["atr"], p["entry"] + 0.12 * X["atr"]]
@@ -404,8 +412,8 @@ def _build(X, p, verdict, now):
         path=_path(X, p, allf, state),
         entry=dict(side=p["side"], type=p["type"], entry=float(p["entry"]), sl=float(p["sl"]),
                    tps=[float(t) for t in p["tps"][:2]], zone=sorted(float(z) for z in zone), active=state == "go",
-                   label=(f"{word.capitalize()} zone" if state != "go" else f"{word.capitalize()} {p['type']}")
-                         + (" · only after " + " ".join(f"({s['n']})" for s in steps) if steps and state != "go" else "")),
+                   label=f"Best entry · grade {v.get('grade') or p.get('grade')}" if state != "go"
+                   else f"{word.capitalize()} {p['type']}"),
         how=f"{word} " + ("at market" if p["type"] == "market" else f"{p['type']} at {f.p(p['entry'])}"),
         levels_text=f"Stop {f.p(p['sl'])}, first target {f.p(p['tps'][0])}.", grade=p.get("grade"),
         keys=sorted(keys))
@@ -454,9 +462,6 @@ def with_news(hud, news):
     hud["met"] = sum(c["ok"] for c in checks)
     hud["total"] = len(checks)
     hud["steps"] = _steps(bad)
-    if hud.get("state") == "wait" and hud.get("entry") and hud["steps"]:
-        base = hud["entry"]["label"].split(" · ")[0]
-        hud["entry"]["label"] = base + " · only after " + " ".join(f"({s['n']})" for s in hud["steps"])
     hud["keys"] = sorted({x["key"] for x in bad})
     hud["summary"] = compose(hud)
     return hud

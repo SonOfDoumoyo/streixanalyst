@@ -302,7 +302,7 @@ def _attach_news(res, spec, tf):
 
 
 def analyze(symbol, tf, account=1000.0, risk_pct=1.0, mode="pro", user_drawings=None, leverage=None, at=None,
-            strategies=None):
+            strategies=None, target_mode=None):
     """The analysis. With `at` it is a replay: run as it would have been at that moment, from candles that had closed
     by then. Today's headlines are left out, because they did not exist then."""
     tf = _norm_tf(tf)
@@ -317,7 +317,7 @@ def analyze(symbol, tf, account=1000.0, risk_pct=1.0, mode="pro", user_drawings=
         try:
             res = ga.analyze(symbol, tf, account=float(account), risk_pct=float(risk_pct), mode=mode,
                              user_drawings=user_drawings or None, brain=brain(), leverage=leverage, data=C, asof=asof,
-                             strategies=strategies)
+                             strategies=strategies, target_mode=target_mode)
         except ValueError as e:
             raise EngineError(str(e))
         res = ga.jsonable(res)

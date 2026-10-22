@@ -111,6 +111,9 @@ export function verdictTone(v) {
   if (!v) return "wait";
   if (v.trade && v.side === "long") return "buy";
   if (v.trade && v.side === "short") return "sell";
+  // the best entry (not confirmed) still leads with its side
+  if (v.best && v.best_side === "long") return "buy";
+  if (v.best && v.best_side === "short") return "sell";
   return "wait";
 }
 

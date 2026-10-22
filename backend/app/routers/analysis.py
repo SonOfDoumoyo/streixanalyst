@@ -22,6 +22,7 @@ class AnalyzeIn(BaseModel):
     mode: str | None = None
     drawings: list = Field(default_factory=list, max_length=60)
     strategies: list[str] | None = Field(None, max_length=60)      # None: the person's saved choice
+    target_mode: str | None = Field(None, pattern="^(liquidity|winrate)$")   # TP1 at liquidity, or where most setups get
 
 
 class WhatIfIn(BaseModel):
@@ -89,7 +90,7 @@ def run(body: AnalyzeIn, user: User = Depends(verified_user), db: Session = Depe
     try:
         res = engine.analyze(body.symbol.strip(), body.tf, account=body.account, risk_pct=body.risk_pct, mode=mode,
                              user_drawings=_clean_drawings(body.drawings), leverage=body.leverage,
-                             strategies=strategies_for(user, body.strategies))
+                             strategies=strategies_for(user, body.strategies), target_mode=body.target_mode)
     except engine.EngineError as e:
         refund(db, user, "analysis")
         raise HTTPException(422, str(e))

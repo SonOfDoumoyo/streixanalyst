@@ -450,6 +450,64 @@ def _candidate_plans(X, max_trig_atr=5.0):
     return plans
 
 
+def _market_plans(X, brain):
+    """The last resort, so an entry is always stated: a buy and a sell from the current price, each with a stop past
+    the nearest liquidity and targets at the next levels (the same rules as 'Analyse from this price')."""
+    ctx, f, atr, price = X["sctx"], X["f"], X["atr"], X["price"]
+    i = ctx.n - 1
+    depth = float(X.get("depth") or 0.3)
+    out = []
+    for d in (1, -1):
+        pools = [q for q in ctx.pools(i, -d) if d * (price - q) > 0.25 * atr]
+        near = (max(pools) if d == 1 else min(pools)) if pools else None
+        sl = near - d * (depth + 0.05) * atr if near is not None and d * (price - near) <= 3.5 * atr else price - d * 1.5 * atr
+        if d * (price - sl) < 0.5 * atr:
+            sl = price - d * 0.5 * atr
+        word = "buy" if d == 1 else "sell"
+        p = _plan("long" if d == 1 else "short", "market", f"Best available {word} at market", price, sl,
+                  _targets(X["clusters"], price, sl, d, atr),
+                  [f"no setup is forming, so this is the {word} side from the current price: stop past the nearest "
+                   f"liquidity, targets at the next levels"], f"price reaching {f.p(sl)}", gm.EXPIRY)
+        if p is None:
+            continue
+        p = pb.guard(p, X)
+        out.append(evaluate_plan(dict(p, fallback=True), X, brain))
+    return out
+
+
+WIN_TARGET = 0.68          # the share of similar setups a win-rate TP1 should reach before the stop
+
+
+def _winrate_targets(p, X, brain):
+    """Win-rate targets: TP1 moves to the farthest point that similar setups reached before their stop about 68% of the
+    time (the race model's odds), never closer than costs allow; the liquidity targets stay as TP2/TP3 for a runner."""
+    d, entry, sl, atr = p["dir"], p["entry"], p["sl"], X["atr"]
+    risk = abs(entry - sl)
+    b = risk / atr
+    grid = np.linspace(0.5, 2.5, 21)
+    p_tp = np.asarray(brain.race(X["row"], np.full(len(grid), float(d)), grid * b, np.full(len(grid), b))[0])
+    ok = grid[p_tp >= WIN_TARGET]
+    r1 = float(ok.max()) if len(ok) else float(grid[int(np.argmax(p_tp))])
+    r1 = max(r1, 4 * X["cost"] * entry / risk)
+    tp1 = entry + d * r1 * risk
+    if d * (p["tps"][0] - tp1) <= 0.05 * risk:
+        return dict(p, target_mode="winrate")             # the first liquidity target is already this close
+    odds = int(round(float(np.interp(r1, grid, p_tp)) * 100))
+    rest = [(t, lab) for t, lab in zip(p["tps"], p["tp_labels"]) if d * (t - tp1) > 0.3 * risk][:2]
+    keep = {k: p[k] for k in ("zone", "strategy", "strategy_name", "signal_age", "liquidity_guard", "sweep_first",
+                              "fallback") if k in p}
+    q = _plan(p["side"], p["type"], p["setup"], entry, sl,
+              [(tp1, f"win-rate target: about {odds}% of similar setups got here before the stop")] + rest,
+              p["why"] + [f"TP1 at {r1:.1f}R, where about {odds}% of similar setups got before their stop (win-rate "
+                          f"targets); the liquidity target stays as the runner"],
+              p["invalidation"], p["expiry"], p.get("family"), keep)
+    if q is None:
+        return p
+    q = evaluate_plan(q, X, brain)
+    q["target_mode"] = "winrate"
+    return q
+
+
 def _finalize_plans(plans, X, widen=True):
     price, atr, clusters = X["price"], X["atr"], X["clusters"]
     min_risk = max(0.5 * atr, 8 * X["cost"] * price) if widen else 0.25 * atr   # costs ≤ 12.5% of the risk
@@ -715,12 +773,16 @@ def analyze_user_drawings(items, X, brain):
 
 # ───────────────────────────── main ─────────────────────────────
 def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_drawings=None, brain=None,
-            leverage=None, now=None, show_bars=SHOW_BARS, data=None, asof=None, strategies=None):
+            leverage=None, now=None, show_bars=SHOW_BARS, data=None, asof=None, strategies=None, target_mode=None):
     """Full analysis of `symbol` on timeframe `tf` (1m 5m 15m 30m 1h 4h 1D 3D 1W 1M).
     `asof` (a replay): the analysis is run as it would have been at that moment. Every candle it reads, on every
     timeframe, had closed by then, and the clock is that moment.
     `strategies` (catalog ids from strategies.py): the analysis uses only these strategies' setups and draws what
-    they use. None = the analyst's own mix of setups."""
+    they use. None = the analyst's own mix of setups.
+    `target_mode`: "liquidity" (default) puts TP1 at the first level ≥ 1R; "winrate" puts TP1 where about 68% of
+    similar setups got before their stop, with the liquidity target kept as TP2.
+    There is always an entry: when the chosen strategies have no setup the analyst's own setups give the best one,
+    and when nothing is forming, the better side from the current price."""
     t_start = time.time()
     brain = brain or _STATE["brain"] or gm.FallbackBrain()
     tf = md.norm_tf(tf)
@@ -902,6 +964,26 @@ def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_draw
     X["notes"] = notes
     plans = [evaluate_plan(p, X, brain) for p in make_plans(X)]
     plans = [p for p in plans if p["rr"][0] >= 0.8]
+    X["entry_source"] = "strategies" if X["chosen"] else "analyst"
+    if not plans and X["chosen"]:
+        # the chosen strategies have no setup now: the analyst's own setups still give the best entry, marked as such
+        waits = "; ".join(dict.fromkeys(st.BY_ID[i]["wait_for"] for i in X["chosen"] if not st.BY_ID[i]["fixed_time"]))
+        plans = [evaluate_plan(dict(p, fallback=True), X, brain) for p in make_plans(dict(X, chosen=None))]
+        plans = [p for p in plans if p["rr"][0] >= 0.8]
+        if plans:
+            X["entry_source"] = "analyst"
+            X["fallback_note"] = ("None of your strategies has a setup right now"
+                                  + (f" (they wait for {waits})" if waits else "")
+                                  + ". This is the best entry from the analyst's own setups.")
+    if not plans:
+        plans = _market_plans(X, brain)
+        if plans:
+            X["entry_source"] = "market"
+            X["fallback_note"] = ("Nothing is forming on this chart, so this is the better side to take from the current "
+                                  "price: stop past the nearest liquidity, targets at the next levels.")
+    X["target_mode"] = "winrate" if target_mode == "winrate" else "liquidity"
+    if X["target_mode"] == "winrate":
+        plans = [_winrate_targets(p, X, brain) for p in plans]
     # the strategy head (Notebook 10): how signals like this one did across years of markets
     for p in plans:
         if p.get("strategy"):
@@ -946,7 +1028,8 @@ def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_draw
         divergences=X["divs"], session=X["session"], period_levels=X["period"], rsi=X["rsi"],
         probabilities=X["prob"], model=X["skill"], user_drawings=X["user"], notes=notes,
         strategies=_strategies_block(X), mtf=X["mtf"], fixed_time=X["fixed_time"], liquidity=X["liq_map"],
-        how_to_enter=pb.how_to_enter(primary, X), hud=X["hud"], layers_scope=st.layers_for(X["chosen"]) if X["chosen"] else None,
+        how_to_enter=pb.how_to_enter(primary, X), hud=X["hud"], entry_source=X["entry_source"],
+        fallback_note=X.get("fallback_note"), target_mode=X["target_mode"], layers_scope=st.layers_for(X["chosen"]) if X["chosen"] else None,
         disclaimer="Research tool, not financial advice. Probabilities are calibrated estimates from history; "
                    "markets change. Analysis may differ on other timeframes and changes with every new candle. "
                    "Paper-trade first and never risk money you can't afford to lose.")
@@ -1026,7 +1109,7 @@ def _public_plan(p, f):
     keep = ("side", "type", "setup", "family", "entry", "sl", "tps", "tp_labels", "rr", "p_fill", "p_tp", "p_sl",
             "p_open", "breakeven", "ev", "cost_r", "risk_atr", "chase_limit", "score", "grade", "hist_grade",
             "evidence", "checklist", "why", "invalidation", "expiry", "sizing", "zone", "strategy", "strategy_name",
-            "signal_age", "liquidity_guard", "sweep_first", "head")
+            "signal_age", "liquidity_guard", "sweep_first", "head", "fallback", "target_mode")
     out = {k: p.get(k) for k in keep}
     out["text"] = (f"{'BUY' if p['dir'] == 1 else 'SELL'} {p['type'].upper()} EP {f.p(p['entry'])} | SL {f.p(p['sl'])} | "
                    + " | ".join(f"TP{i + 1} {f.p(t)}" for i, t in enumerate(p["tps"])))
@@ -1070,21 +1153,23 @@ def _verdict(p, X):
     if p["grade"] in ("A+", "A", "B") and not trade:
         why_not = ("costs are too large for this timeframe" if p["cost_r"] > 0.30 else
                    f"the odds don't support it (EV {p['ev'][j]:+.2f}R)")
+    how = "at market" if p["type"] == "market" else f"{p['type']} at {f.p(p['entry'])}"
     if trade:
         act = f"{word} NOW (market)" if p["type"] == "market" else f"{word} {p['type'].upper()}"
     else:
-        act = "NO TRADE (wait)"
+        act = f"Best entry · {word} {how}"
     j = min(1, len(p["tps"]) - 1)
     if trade:
         head = f"{act} · grade {p['grade']} ({p['score']:.1f}/10) · {p['setup']}"
     elif why_not:
-        head = (f"NO TRADE: the best idea is grade {p['grade']} on the chart, but {why_not}. Conditional plan: {word} "
-                f"{p['type']} {f.p(p['entry'])} only if conditions improve")
+        head = (f"Best entry: {word.lower()} {how}, grade {p['grade']}. Not a confirmed setup: {why_not}. Take it "
+                f"smaller, or wait for the reasons against it to clear")
     else:
-        head = (f"NO TRADE: the best idea is only grade {p['grade']} ({p['score']:.1f}/10). Conditional plan: {word} "
-                f"{p['type']} {f.p(p['entry'])} only if conditions improve")
+        head = (f"Best entry: {word.lower()} {how}, grade {p['grade']} ({p['score']:.1f}/10). Not a confirmed setup "
+                f"yet (B needs 5/10): take it smaller, or wait for the reasons against it to clear")
     return dict(action=act, side=p["side"] if trade else None, grade=p["grade"], score=p["score"], headline=head,
-                trade=trade, ep=p["entry"], sl=p["sl"], tp=p["tps"][j], tps=p["tps"])
+                trade=trade, best=not trade, best_side=p["side"], why_not=why_not, ep=p["entry"], sl=p["sl"],
+                tp=p["tps"][j], tps=p["tps"])
 
 
 # ───────────────────────────── the written report ─────────────────────────────
@@ -1869,9 +1954,13 @@ def chart_data(X, show_bars=SHOW_BARS):
         o, pr = 18 + k, 1 if not dim else 2
         tag = "plan" if not dim else "alternative"
         add("plan", "box", o, pr, x1=x1, x2=x2, y1=min(pl["entry"], pl["tps"][-1]), y2=max(pl["entry"], pl["tps"][-1]),
-            fill="rgba(38,166,154,0.10)" if dim else "rgba(38,166,154,0.22)", plan=tag)
+            fill="rgba(38,166,154,0.10)" if dim else "rgba(38,166,154,0.22)", plan=tag,
+            title=f"{'Alternative' if dim else 'The'} plan's reward", why=f"From the entry {f.p(pl['entry'])} to the last "
+            f"target {f.p(pl['tps'][-1])}: what the trade can make if it works.")
         add("plan", "box", o, pr, x1=x1, x2=x2, y1=min(pl["entry"], pl["sl"]), y2=max(pl["entry"], pl["sl"]),
-            fill="rgba(239,83,80,0.10)" if dim else "rgba(239,83,80,0.22)", plan=tag)
+            fill="rgba(239,83,80,0.10)" if dim else "rgba(239,83,80,0.22)", plan=tag,
+            title=f"{'Alternative' if dim else 'The'} plan's risk", why=f"From the entry {f.p(pl['entry'])} to the stop "
+            f"{f.p(pl['sl'])}: what the trade loses if it's wrong. Size the position so this costs 1% or less.")
         pre = "" if not dim else "alt "
         guard_txt = ""
         if pl.get("liquidity_guard"):

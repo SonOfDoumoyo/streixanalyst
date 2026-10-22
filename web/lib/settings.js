@@ -28,6 +28,8 @@ export const DEFAULT_SETTINGS = {
   indicators: { ema20: false, ema50: true, ema200: true, bb: false, vwap: false },
   analysis: { detail: 2, animate: true, account: 1000, risk_pct: 1, leverage: "", mode: "auto", showAlt: false, directionView: "range",
     showLevels: true,          // off: analysis only, no entry / stop / target anywhere
+    targetMode: "liquidity",   // TP1 at the first liquidity level, or "winrate": where about 68% of similar setups got
+    hud: true,                 // the reasons on the chart after Analyse
     fixedTime: false },        // the person also trades fixed time (shows the up/down card first)
   studies: [],               // indicators from the library: [{ key, id, params }] (components/chart/studies.js)
   intervalFavorites: ["5m", "15m", "1h", "4h"],

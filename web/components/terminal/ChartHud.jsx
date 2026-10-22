@@ -17,7 +17,7 @@ export function hudOf(res) {
   const v = res.verdict || {};
   const p = res.plan;
   const checks = (p && Array.isArray(p.checklist) ? p.checklist : []).map((c) => ({ ok: !!c.ok, text: c.text, key: c.key || null }));
-  const state = !p ? "dont" : v.trade ? "go" : "wait";
+  const state = !p ? "dont" : v.trade ? "go" : "best";
   const word = p && p.side === "short" ? "sell" : "buy";
   const flags = [];
   const ev = ((res.news && res.news.events) || []).find((e) => String(e.impact || "").toLowerCase() === "high"
@@ -34,11 +34,11 @@ export function hudOf(res) {
   const last = res.candles && res.candles.length ? res.candles[res.candles.length - 1][0] : null;
   return {
     state, legacy: true, confidence: v.confidence ? v.confidence.level : null, tf: res.tf, trend: [], flags, checks, steps: [], path: null,
-    title: state === "go" ? `Possible ${word}` : state === "wait" ? "Wait" : "Don't trade",
-    sub: state === "go" ? (p.type === "market" ? "Now, at market" : `${p.type[0].toUpperCase()}${p.type.slice(1)} at ${fmtPrice(p.entry, res.decimals)}`)
-      : state === "wait" ? "No entry yet" : "No setup worth taking",
+    title: state === "go" ? `Possible ${word}` : state === "best" ? "Best entry" : "Don't trade",
+    sub: p ? (p.type === "market" ? `${word[0].toUpperCase()}${word.slice(1)} now, at market` : `${word[0].toUpperCase()}${word.slice(1)} ${p.type} at ${fmtPrice(p.entry, res.decimals)}`)
+      : "No setup worth taking",
     met: checks.filter((c) => c.ok).length, total: checks.length, summary: v.headline || "",
-    entry: p ? { side: p.side, type: p.type, entry: p.entry, sl: p.sl, tps: (p.tps || []).slice(0, 2), active: state === "go", label: state === "go" ? `${word[0].toUpperCase()}${word.slice(1)} ${p.type}` : `${word[0].toUpperCase()}${word.slice(1)} zone` } : null,
+    entry: p ? { side: p.side, type: p.type, entry: p.entry, sl: p.sl, tps: (p.tps || []).slice(0, 2), active: state === "go", label: state === "go" ? `${word[0].toUpperCase()}${word.slice(1)} ${p.type}` : `Best entry · grade ${v.grade || p.grade}` } : null,
     last_t: last, step: (res.meta && res.meta.tf_seconds) || 3600,
   };
 }
@@ -109,7 +109,7 @@ export default function ChartHud({ eng, res, mobile, dec = 2, showLevels = true,
   const view = useView(eng, !!hud);
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
   const [whyOpen, setWhyOpen] = useState(null);
-  const [sheetOpen, setSheetOpen] = useState(true);
+  const [sheetOpen, setSheetOpen] = useState(false);
   const [focus, setFocus] = useState(null);
   const [intro, setIntro] = useState(false);
   const [sizes, setSizes] = useState({});
@@ -118,7 +118,8 @@ export default function ChartHud({ eng, res, mobile, dec = 2, showLevels = true,
   useEffect(() => {
     if (!hud) return undefined;
     setIntro(true);
-    setSheetOpen(true);
+    setSheetOpen(false);
+    setWhyOpen(null);
     setFocus(null);
     setSizes({});
     const t = setTimeout(() => setIntro(false), 2400);
@@ -161,17 +162,17 @@ export default function ChartHud({ eng, res, mobile, dec = 2, showLevels = true,
       const pw = Math.min(W - 16, 70 + (hud.title.length + String(hud.met).length * 2) * 7.2 + 64);
       out.scan = { x: 8, y: 56, w: pw, h: 30 };
       obstacles.push({ x: 0, y: 0, w: Math.min(W, 250), h: 52 }, out.scan, { x: view.W - 104, y: 6, w: 48, h: 48 });
-      const sh = sz("sheet", sheetOpen ? 210 : 58);
+      const sh = sz(`sheet${sheetOpen ? "o" : ""}`, sheetOpen ? 214 : 64);
       out.sheet = { x: 8, y: view.H - bottomInset - sh, w: view.W - 16, h: sh };
       obstacles.push(out.sheet);
     } else {
       const sw = 304;
       const sumLines = lines(hud.summary, sw, 6.6);
-      out.scan = { x: 12, y: 62, w: sw, h: sz("scan", 140 + sumLines * 18) };
+      out.scan = { x: 12, y: 62, w: sw, h: sz("scan", 112 + Math.min(4, sumLines) * 18 + (hud.note ? 40 : 0)) };
       obstacles.push({ x: 0, y: 0, w: Math.min(W, 340), h: 58 }, out.scan, { x: view.W - 270, y: 6, w: 200, h: 40 });
       const dockX0 = view.W / 2 - 250;
       const whyW = 352;
-      const open = whyOpen === null ? H >= 600 : whyOpen;
+      const open = !!whyOpen;
       const whyBottom = dockX0 > 12 + whyW + 8 ? H - 12 : Math.min(H - 12, view.H - 96);
       const wh = sz("why", open ? 48 + Math.min(10, (hud.checks || []).length) * 24 : 40);
       const wy = Math.max(out.scan.y + out.scan.h + 12, whyBottom - wh);
@@ -257,10 +258,11 @@ export default function ChartHud({ eng, res, mobile, dec = 2, showLevels = true,
         continue;
       }
       const id = `f${f.n}`;
-      const open = !mobile || focus === f.n;
-      const est = mobile ? (open ? 50 + lines(f.text, cw, 6) * 15 : 16 + lines(f.title, cw, 6.4) * 16) : 34 + lines(f.text, cw, 6.2) * 17;
+      // a one-line pill until it's opened (tap / click), so the chart stays readable
+      const open = focus === f.n;
+      const w = open ? cw : Math.min(mobile ? 178 : 290, 46 + f.title.length * (mobile ? 6.6 : 7));
+      const est = open ? (mobile ? 50 + lines(f.text, cw, 6) * 15 : 34 + lines(f.text, cw, 6.2) * 17) : (mobile ? 16 + lines(f.title, w, 6.6) * 16 : 30);
       const h = sz(`${id}${open ? "o" : ""}`, est);
-      const w = cw;
       const g = mobile ? 22 : 34;
       const c = a.f.kind === "time"
         ? [0, 1, 2, 3, 4, 5].flatMap((k) => [[a.x - w - 14, a.y + k * 64], [a.x + 14, a.y + k * 64]])
@@ -294,7 +296,7 @@ export default function ChartHud({ eng, res, mobile, dec = 2, showLevels = true,
     const above = res && Number.isFinite(res.price) ? f.price > res.price : true;
     onAlert({ price: f.price, op: above ? "above" : "below", note: f.title });
   };
-  const stateWord = hud.state === "go" ? (hud.entry && hud.entry.side === "short" ? "sell" : "buy") : hud.state;
+  const stateWord = hud.state === "go" || hud.state === "best" ? (hud.entry && hud.entry.side === "short" ? "sell" : "buy") : hud.state;
   const pathD = L.path ? L.path.map((q, i) => `${i ? "L" : "M"}${q.x.toFixed(1)} ${q.y.toFixed(1)}`).join(" ") : null;
   const tail = L.path && L.path.length > 1 ? (() => {
     const a = L.path[L.path.length - 2];
@@ -358,7 +360,7 @@ export default function ChartHud({ eng, res, mobile, dec = 2, showLevels = true,
           <i className={`hud-n ${tl.f.tone}`}>{tl.f.n}</i>{tl.off > 0 ? "→ " : tl.off < 0 ? "← " : ""}{hhmm(tl.f.t)}
         </div>
       ))}
-      {L.marks.filter((q) => q.mark !== "entry" || (hud.state === "wait" && !L.entryTag)).map((q, k) => (q.mark === "entry"
+      {L.marks.filter((q) => q.mark !== "entry" || (hud.state !== "go" && !L.entryTag)).map((q, k) => (q.mark === "entry"
         ? <span key={`m${k}`} className="hud-entry-word" style={{ left: q.x + 8, top: q.y - 7 }}>Entry</span>
         : <i key={`m${k}`} className={`hud-n path ${L.tones[q.mark] || "wait"}`} style={{ left: q.x - 9, top: q.y - 28 }}>{q.mark}</i>))}
 
@@ -383,9 +385,9 @@ export default function ChartHud({ eng, res, mobile, dec = 2, showLevels = true,
       ) : (
         <div key={`c${a.f.n}`} data-hid={id} className={`hud-card ${a.f.tone}${mobile ? " compact" : ""}${open ? " open" : ""}`}
           style={{ left: r.x, top: r.y, width: r.w, ...seq() }}
-          onClick={mobile ? () => setFocus(focus === a.f.n ? null : a.f.n) : undefined} role={mobile ? "button" : undefined}>
+          onClick={() => setFocus(focus === a.f.n ? null : a.f.n)} role="button" title={open ? "Close" : "Open this reason"}>
           <div className="hc-head"><i className={`hud-n ${a.f.tone}`}>{a.f.n}</i><b>{a.f.title}</b></div>
-          {mobile && !open ? null : <div className="hc-text">{a.f.text}</div>}
+          {open ? <div className="hc-text">{a.f.text}</div> : null}
         </div>
       )))}
 
@@ -411,14 +413,15 @@ export default function ChartHud({ eng, res, mobile, dec = 2, showLevels = true,
             {onHide ? <button className="hs-x" onClick={onHide} aria-label="Hide the reasons on the chart" title="Hide the reasons (the analysis stays)">×</button> : null}
           </div>
           <div className="hs-main">
-            <Ring met={hud.met} total={hud.total} />
+            <Ring met={hud.met} total={hud.total} size={58} />
             <div className="hs-words">
-              <b className={`hs-title ${stateWord}`}>{hud.title}</b>
+              <b className={`hs-title ${stateWord}`}>{hud.title}{hud.grade && hud.state !== "dont" ? <i className={`hs-grade g-${String(hud.grade).replace("+", "plus")}`}>{hud.grade}</i> : null}</b>
               <span className="hs-sub">{hud.sub}</span>
               {hud.confidence && CONF[hud.confidence] ? <span className={`hs-conf ${hud.confidence}`}>{CONF[hud.confidence]}</span> : null}
             </div>
           </div>
-          <p className="hs-sum"><Numbered text={hud.summary} tones={L.tones} /></p>
+          {hud.note ? <p className="hs-note">{hud.note}</p> : null}
+          <p className="hs-sum" title={hud.summary}><Numbered text={hud.summary} tones={L.tones} /></p>
           {stale && onAnalyse ? <button className="hs-stale" onClick={onAnalyse}>A new candle closed: analyse again</button> : null}
           {hud.legacy && onAnalyse ? <button className="hs-stale" onClick={onAnalyse}>Analyse again to see every reason on the chart</button> : null}
         </div>
@@ -428,7 +431,7 @@ export default function ChartHud({ eng, res, mobile, dec = 2, showLevels = true,
       {!mobile && L.why ? (
         <div className="hud-why" data-hid="why" style={{ left: L.why.x, top: L.why.y, width: L.why.w, maxHeight: L.why.max, ...seq() }}>
           <button className="hw-head" onClick={() => setWhyOpen(!L.why.open)} aria-expanded={L.why.open}>
-            <b>{hud.state === "go" ? "Before you enter" : hud.state === "dont" ? "What the chart shows" : "Why not now"}</b>
+            <b>{hud.state === "go" ? "Before you enter" : hud.state === "dont" ? "What the chart shows" : "Why it isn't confirmed"}</b>
             <span>{hud.total ? `${hud.met} of ${hud.total} checks pass` : `${numbered.length} notes`}</span>
             <i className={`chev${L.why.open ? " up" : ""}`}>⌃</i>
           </button>
@@ -455,8 +458,8 @@ export default function ChartHud({ eng, res, mobile, dec = 2, showLevels = true,
           <div className="hsh-row" onClick={() => setSheetOpen(!sheetOpen)} role="button">
             <Ring met={hud.met} total={hud.total} size={sheetOpen ? 48 : 36} />
             <div className="hs-words">
-              <b className={`hs-title ${stateWord}`}>{hud.state === "wait" ? "Wait: no entry yet" : hud.title}</b>
-              <span className="hs-sub">{hud.state === "wait" ? (hud.entry ? hud.entry.label : "") : hud.sub}</span>
+              <b className={`hs-title ${stateWord}`}>{hud.state === "best" ? `Best entry · ${hud.sub}` : hud.state === "go" ? hud.sub : hud.title}</b>
+              <span className="hs-sub num">{hud.entry && showLevels ? `SL ${fmtPrice(hud.entry.sl, dec)} · TP1 ${fmtPrice(hud.entry.tps[0], dec)}${hud.grade ? ` · grade ${hud.grade}` : ""}` : hud.sub}</span>
             </div>
             {hud.confidence && CONF[hud.confidence] ? <span className={`hs-conf ${hud.confidence}`}>{CONF[hud.confidence].replace(" confidence", "")}</span> : null}
           </div>
@@ -471,8 +474,10 @@ export default function ChartHud({ eng, res, mobile, dec = 2, showLevels = true,
                 {!numbered.length ? <div className="hsh-none">{hud.summary}</div> : null}
               </div>
               <div className="hsh-btns">
-                <button className="hsh-b" onClick={onOpen}>Full analysis</button>
-                {firstLevel && onAlert ? (
+                <button className="hsh-b" onClick={onOpen}>All details</button>
+                {hud.entry && showLevels && onAlert ? (
+                  <button className="hsh-b primary" onClick={() => alertOf({ price: hud.entry.entry, title: `Entry ${fmtPrice(hud.entry.entry, dec)}` })}>Alert me at the entry</button>
+                ) : firstLevel && onAlert ? (
                   <button className="hsh-b primary" onClick={() => alertOf(firstLevel)}>Alert me at {fmtPrice(firstLevel.price, dec)}</button>
                 ) : onHide ? <button className="hsh-b" onClick={onHide}>Hide reasons</button> : null}
               </div>

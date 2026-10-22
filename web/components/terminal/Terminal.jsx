@@ -34,6 +34,7 @@ import IntervalSheet, { IntervalChip } from "./IntervalSheet";
 import IndicatorSheet from "./IndicatorSheet";
 import { ExplainCard, FromHereChip, WhatIfSheet } from "./ChartNotes";
 import ChartHud, { hudOf } from "./ChartHud";
+import FullAnalysis from "./FullAnalysis";
 
 const COMPARE_COLORS = ["#f5a524", "#b78bff", "#3fb8ff", "#ff6bcb"];
 const LAYOUT_KEYS = ["volume", "rsi", "logScale", "grid", "killzones", "watermark"];
@@ -122,7 +123,7 @@ function StrategyChip({ user, onClick, compact }) {
 }
 
 export default function Terminal() {
-  const { user, settings, updateSettings, refresh, toast, logout } = useAuth();
+  const { user, settings, updateSettings, refresh, toast, logout, can } = useAuth();
   const router = useRouter();
   const sp = useSearchParams();
   const width = useWidth();
@@ -176,6 +177,7 @@ export default function Terminal() {
   const [stratOverlay, setStratOverlay] = useState(null);
   const [publishOpen, setPublishOpen] = useState(false);
   const [live, setLive] = useState(false);
+  const [fullOpen, setFullOpen] = useState(false);
   const eng = useRef(null);
   const [engReady, setEngReady] = useState(false);
   const barsRef = useRef(600);
@@ -282,7 +284,7 @@ export default function Terminal() {
     if (!eng.current) return;
     const h = showHud ? hudOf(res) : null;
     eng.current.setDetail(h ? 1 : 2);
-    eng.current.setPlanDim(!!(h && h.state !== "go"));
+    eng.current.setPlanDim(false);           // the best entry leads, so its plan is drawn at full strength
   }, [engReady, showHud, res]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (eng.current) eng.current.setDrawingsVisible(drawVisible);
@@ -525,7 +527,10 @@ export default function Terminal() {
     }
   };
 
-  const analyse = useCallback(async () => {
+  // `over` lets a control re-run the analysis with a setting it just changed (the target style), before the saved
+  // settings come back; a click event passed in is ignored
+  const analyse = useCallback(async (over) => {
+    const o = over && typeof over === "object" && !over.nativeEvent && !over.target ? over : {};
     if (replayRef.current) {
       setTab("replay");
       setPanelOpen(true);
@@ -543,6 +548,7 @@ export default function Terminal() {
       const d = await post("/analysis/run", {
         symbol, tf: atf, account: Number(a.account) || 1000, risk_pct: Number(a.risk_pct) || 1,
         leverage: a.leverage ? Number(a.leverage) : null, mode: a.mode === "auto" ? null : a.mode,
+        target_mode: (o.targetMode || a.targetMode) === "winrate" ? "winrate" : "liquidity",
         drawings: toUserDrawings(eng.current.getDrawings()),
       });
       storeAnalysisLocal(symbol, atf, d);
@@ -973,7 +979,8 @@ export default function Terminal() {
             onUpgrade={() => setPaywall({ message: "Upgrade to Pro for both report styles and the model statistics." })}
             hiddenLayers={hiddenLayers} toggleLayer={toggleLayer} layers={layers} showAlt={showAlt}
             setShowAlt={(b) => { setShowAlt(b); updateSettings({ analysis: { showAlt: b } }); }} stale={stale} symbolLabel={display} tf={analysisTf(tf)} symbol={symbol}
-            onEditPlan={editToDesk} onStrategies={() => setPicker(true)} />
+            onEditPlan={editToDesk} onStrategies={() => setPicker(true)} onFull={() => setFullOpen(true)}
+            onTf={(t) => { if (ALL_TFS.includes(t)) setTf(t); }} />
         ) : null}
         {tab === "ai" ? (
           <AIChat symbol={symbol} tf={analysisTf(tf)} analysisId={res && res.analysis_id} pending={pendingAsk} clearPending={() => setPendingAsk(null)} onLimit={showLimit} />
@@ -1228,6 +1235,8 @@ export default function Terminal() {
       <ReviewModal open={review.open} onClose={() => setReview({ open: false, prefill: null })} symbol={symbol} tf={analysisTf(tf)} prefill={review.prefill}
         price={meta && meta.price} decimals={dec} settings={settings} onLimit={showLimit} onShowOnChart={placeTrade} />
       <Paywall open={!!paywall} onClose={() => setPaywall(null)} info={paywall} />
+      <FullAnalysis open={fullOpen && !!res} onClose={() => setFullOpen(false)} res={res} can={can}
+        onUpgrade={() => { setFullOpen(false); setPaywall({ message: "Upgrade to Pro for both report styles and the model statistics." }); }} />
       <Modal open={publishOpen} onClose={() => setPublishOpen(false)} title="Publish an idea">
         <form className="stack" onSubmit={(e) => { e.preventDefault(); publishIdea(); }}>
           <div className="field"><label>Title</label><input className="input" value={idea.title} onChange={(e) => setIdea({ ...idea, title: e.target.value })} maxLength={140} required minLength={3} /></div>
