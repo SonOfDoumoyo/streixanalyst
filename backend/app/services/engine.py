@@ -2,6 +2,7 @@
 import logging
 import sys
 import threading
+import os
 import time
 import warnings
 from pathlib import Path
@@ -53,7 +54,8 @@ BUNDLED_BRAIN = Path(__file__).resolve().parent.parent.parent / "models" / "guru
 
 def load_brain(path=None):
     path = Path(path or settings.brain_path)
-    if not path.exists() and path != BUNDLED_BRAIN and BUNDLED_BRAIN.exists():
+    if (not path.exists() and path != BUNDLED_BRAIN and BUNDLED_BRAIN.exists()
+            and os.environ.get("GURU_BUNDLED_BRAIN", "1") != "0"):
         # no uploaded brain (Render's free plan has no disk, so uploads vanish when the service sleeps or redeploys):
         # use the one committed with the code in backend/models/
         path = BUNDLED_BRAIN

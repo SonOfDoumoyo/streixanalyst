@@ -20,6 +20,7 @@ os.environ.update(
     OPAY_PUBLIC_KEY="OPAYPUB123", OPAY_SECRET_KEY="OPAYSEC456", AI_PROVIDER="auto", ANTHROPIC_API_KEY="", GEMINI_API_KEY="",
     API_RATE_PER_MIN="1000000",                      # the whole suite runs from one address
     GURU_BRAIN_PATH=os.environ.get("TEST_BRAIN", str(TMP / "none.joblib")),
+    GURU_BUNDLED_BRAIN="0",                          # the brain committed in backend/models is for the real server
     MANUAL_ACCOUNTS=json.dumps([{"bank": "OPay", "number": "9160309499", "name": "NIMI DOUMOYO MEREMUBIO"},
                                 {"bank": "UBA", "number": "2385227704", "name": "NIMI DOUMOYO MEREMUBIO"}]))
 
