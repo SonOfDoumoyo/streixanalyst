@@ -11,7 +11,9 @@ import UsageMeter from "@/components/UsageMeter";
 import { initials } from "@/lib/format";
 
 export const APP_LINKS = [
-  ["/terminal", "Terminal", "candles"],
+  ["/terminal", "Chart", "candles"],
+  ["/desk", "My analysis", "book"],
+  ["/markets", "Markets & ideas", "globe"],
   ["/ai", "StreixAI", "sparkles"],
   ["/practice", "Draw & score", "target"],
   ["/strategy", "Strategy lab", "sliders"],

@@ -220,8 +220,8 @@ def _to_analyst_drawings(items):
     """The chart's drawings (engine format: type + points) as the analyst's input (levels, zones, trendlines)."""
     out = []
     for d in items:
-        if not isinstance(d, dict) or d.get("hidden"):
-            continue
+        if not isinstance(d, dict) or d.get("hidden") or (d.get("style") or {}).get("fromAi"):
+            continue                                # the analyst's own drawings aren't graded as the person's levels
         P = d.get("points") or []
         label = ((d.get("style") or {}).get("text") or "")[:60] or None
         t = d.get("type")

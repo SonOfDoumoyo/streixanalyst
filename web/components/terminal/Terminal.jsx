@@ -1,21 +1,22 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Icon from "@/components/Icons";
-import Brand, { Mark } from "@/components/Brand";
+import Brand from "@/components/Brand";
 import ChartView from "@/components/chart/ChartView";
 import { useAuth } from "@/components/Providers";
 import { Menu, Modal } from "@/components/ui";
 import Paywall from "@/components/Paywall";
 import AlertsBell, { requestAlert } from "@/components/AlertsBell";
-import { APP_LINKS } from "@/components/SubNav";
+import StrategyPicker from "@/components/StrategyPicker";
 import { ApiError, del, get, post, put, qs } from "@/lib/api";
-import { ANALYSIS_STEPS, gradeClass, toOverlay, toUserDrawings, verdictTone } from "@/lib/analysis";
-import { cleanSymbol, fmtChange, fmtPrice, initials, TF_LABEL, TFS } from "@/lib/format";
+import { aiToDrawings, ANALYSIS_STEPS, gradeClass, toOverlay, toUserDrawings, verdictTone } from "@/lib/analysis";
+import { ALL_TFS, analysisTf, cleanSymbol, fmtChange, fmtPrice, initials, TF_LABEL, TFS } from "@/lib/format";
 import { localGet, localSet } from "@/lib/settings";
 import SymbolSearch from "./SymbolSearch";
-import { DrawToolbar, StyleBar, TOOL_KEYS } from "./DrawTools";
+import { StyleBar, TOOL_KEYS } from "./DrawTools";
+import { DrawingStudio, ToolDock } from "./DrawingStudio";
 import AnalysisPanel from "./AnalysisPanel";
 import AIChat from "./AIChat";
 import Watchlist from "./Watchlist";
@@ -27,12 +28,15 @@ import ReplayPanel from "./ReplayPanel";
 import { chartThemeFor } from "@/lib/chartTheme";
 import { CHART_TYPES } from "@/components/chart/series";
 import ChartTypeSheet, { ChartTypeIcon } from "./ChartTypeSheet";
-import { AnalysisHub, BrokerPanel, ComparePanel, IndicatorsPanel, LayoutPanel, LayoutsPanel, ObjectTreePanel, SymbolDetailsPanel,
-  TechnicalsPanel } from "./HubPanels";
+import { BrokerPanel, ComparePanel, LayoutPanel, LayoutsPanel, ObjectTreePanel, SymbolDetailsPanel, TechnicalsPanel } from "./HubPanels";
+import Toolbox from "./Toolbox";
+import IntervalSheet, { IntervalChip } from "./IntervalSheet";
+import IndicatorSheet from "./IndicatorSheet";
+import { ExplainCard, FromHereChip, WhatIfSheet } from "./ChartNotes";
 
 const COMPARE_COLORS = ["#f5a524", "#b78bff", "#3fb8ff", "#ff6bcb"];
 const LAYOUT_KEYS = ["volume", "rsi", "logScale", "grid", "killzones", "watermark"];
-const TABS = [["analysis", "Analysis", "zap"], ["replay", "Replay", "clock"], ["ai", "StreixAI", "sparkles"], ["watchlist", "Watchlist", "list"], ["news", "News", "news"], ["divergence", "Divergence", "candles"]];
+const TABS = [["analysis", "Analyst", "zap"], ["replay", "Replay", "play"], ["ai", "StreixAI", "sparkles"], ["watchlist", "Watchlist", "list"], ["news", "News", "news"], ["divergence", "Divergence", "candles"]];
 const utcLabel = (iso) => `${iso.replace("T", " ").slice(0, 16)} UTC`;
 
 // The analysis on a chart stays there until the user cleans it. The server keeps each one per symbol and timeframe;
@@ -83,16 +87,51 @@ function useWidth() {
   return w;
 }
 
+// The phone stays awake while the chart is open, when the person asked for it (Settings > Keep screen on).
+function useWakeLock(on) {
+  useEffect(() => {
+    if (!on || typeof navigator === "undefined" || !navigator.wakeLock) return undefined;
+    let lock = null;
+    let alive = true;
+    const take = async () => {
+      try {
+        if (alive && document.visibilityState === "visible") lock = await navigator.wakeLock.request("screen");
+      } catch { /* not allowed */ }
+    };
+    take();
+    const vis = () => document.visibilityState === "visible" && take();
+    document.addEventListener("visibilitychange", vis);
+    return () => {
+      alive = false;
+      document.removeEventListener("visibilitychange", vis);
+      if (lock) lock.release().catch(() => {});
+    };
+  }, [on]);
+}
+
+function StrategyChip({ user, onClick, compact }) {
+  const ids = (user && user.strategies) || [];
+  return (
+    <button className={`strat-chip${ids.length ? "" : " empty"}`} onClick={onClick} data-tour="strategies"
+      title={ids.length ? "Strategies the analyst uses" : "Pick the strategies the analyst uses"}>
+      <Icon name="target" size={15} />
+      {compact ? (ids.length ? <i>{ids.length}</i> : null) : <span>{ids.length ? `${ids.length} strateg${ids.length > 1 ? "ies" : "y"}` : "Pick strategies"}</span>}
+    </button>
+  );
+}
+
 export default function Terminal() {
   const { user, settings, updateSettings, refresh, toast, logout } = useAuth();
+  const router = useRouter();
   const sp = useSearchParams();
   const width = useWidth();
   const mobile = width <= 760;
   const narrow = width <= 1100;
   const scale = width >= 3200 ? 1.9 : width >= 2200 ? 1.35 : 1;
+  useWakeLock(!!settings.keepScreenOn);
 
-  const [symbol, setSymbol] = useState(() => cleanSymbol(sp.get("s") || settings.lastSymbol || "BTCUSDT"));
-  const [tf, setTf] = useState(() => (TFS.includes(sp.get("tf")) ? sp.get("tf") : TFS.includes(settings.lastTf) ? settings.lastTf : "1h"));
+  const [symbol, setSymbol] = useState(() => cleanSymbol(sp.get("s") || (settings.rememberChart !== false && settings.lastSymbol) || "BTCUSDT"));
+  const [tf, setTf] = useState(() => (ALL_TFS.includes(sp.get("tf")) ? sp.get("tf") : ALL_TFS.includes(settings.lastTf) && settings.rememberChart !== false ? settings.lastTf : "1h"));
   const [meta, setMeta] = useState(null);
   const [chartState, setChartState] = useState({ loading: true, error: null });
   const [res, setRes] = useState(null);
@@ -101,7 +140,6 @@ export default function Terminal() {
   const [stale, setStale] = useState(false);
   const [layers, setLayers] = useState([]);
   const [hiddenLayers, setHiddenLayers] = useState(() => new Set(localGet("sa_hidden_layers", [])));
-  const [detail, setDetailState] = useState(settings.analysis.detail || 1);
   const [showAlt, setShowAlt] = useState(settings.analysis.showAlt === true);
   const [tab, setTab] = useState("analysis");
   // a replay moment: { at (ISO, UTC), ahead (candles shown after it, once revealed) }, or null when live
@@ -112,6 +150,9 @@ export default function Terminal() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [tool, setToolState] = useState("cursor");
   const [magnet, setMagnetState] = useState(false);
+  const [keepDrawing, setKeepDrawingState] = useState(false);
+  const [lockedAll, setLockedAll] = useState(false);
+  const [toolStyle, setToolStyleState] = useState({ emoji: "🎯", glyph: "★" });
   const [drawVisible, setDrawVisible] = useState(true);
   const [drawMobile, setDrawMobile] = useState(false);
   const [selDrawing, setSelDrawing] = useState(null);
@@ -124,11 +165,16 @@ export default function Terminal() {
   const [pendingAsk, setPendingAsk] = useState(null);
   const [menu, setMenu] = useState(null);
   const [fullscreen, setFullscreen] = useState(false);
-  // TradingView-style sheets: chart types, the analysis hub and the panels it opens
   const [sheet, setSheet] = useState(null);
   const [compare, setCompare] = useState(() => (localGet("sa_compare", []) || []).filter((c) => c && c.symbol).slice(0, 4));
   const [drawList, setDrawList] = useState([]);
   const [analysisOn, setAnalysisOn] = useState(true);
+  const [picker, setPicker] = useState(false);
+  const [explain, setExplain] = useState(null);
+  const [whatIf, setWhatIf] = useState({ open: false, busy: false, data: null, error: null });
+  const [stratOverlay, setStratOverlay] = useState(null);
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [live, setLive] = useState(false);
   const eng = useRef(null);
   const [engReady, setEngReady] = useState(false);
   const barsRef = useRef(600);
@@ -138,10 +184,13 @@ export default function Terminal() {
   resRef.current = res;
   const replayRef = useRef(null);
   replayRef.current = replay;
-  // the analyst's setup and drawings for the replay moment, kept so they can be drawn again when a reveal reloads the chart
   const replayOverlay = useRef(null);
 
-  // the chart follows the app's light or dark mode (see lib/chartTheme.js)
+  // the strategy picker: every account sees it once (new and existing) until a choice is saved
+  useEffect(() => {
+    if (user && user.needs_strategies) setPicker(true);
+  }, [user && user.id, user && user.needs_strategies]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const theme = useMemo(() => chartThemeFor(settings.theme, settings.chart, settings.candles),
     [settings.theme, settings.chart, settings.candles]);
 
@@ -159,6 +208,8 @@ export default function Terminal() {
     } else if (type === "select") setSelDrawing(data);
     else if (type === "crossMenu") setCrossMenu(data);
     else if (type === "toolDone") setToolState("cursor");
+    else if (type === "explain") setExplain(data);
+    else if (type === "copyLevel") copyText(data.text, data.title);
     else if (type === "requestText") {
       const d = eng.current && eng.current.drawings.find((x) => x.id === data);
       setTextEdit({ id: data, value: (d && d.style.text) || "" });
@@ -173,7 +224,7 @@ export default function Terminal() {
     } else if (type === "view") {
       if (data.i0 < 40 && barsRef.current < 5000 && !loadingMore.current && data.n >= barsRef.current * 0.9) loadMore();
     }
-    // loadMore is stable via refs
+    // loadMore and copyText are stable via refs
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const symbolRef = useRef(symbol);
@@ -182,6 +233,15 @@ export default function Terminal() {
   tfRef.current = tf;
   const themeRef = useRef(theme);
   themeRef.current = theme;
+
+  const copyText = async (text, what) => {
+    try {
+      await navigator.clipboard.writeText(String(text).replace(/,/g, ""));
+      toast(`${what || text} copied`, "success", 1600);
+    } catch {
+      toast(String(text), "info", 5000);
+    }
+  };
 
   useEffect(() => {
     if (!eng.current) return;
@@ -192,26 +252,34 @@ export default function Terminal() {
     eng.current.drawingDefaults = settings.drawingDefaults;
     eng.current.setScale(scale);
   }, [engReady, theme, settings.candles.style, settings.chart, settings.indicators, settings.drawingDefaults, scale]);
-
+  useEffect(() => {
+    if (eng.current) eng.current.setStudies(settings.studies || []);
+  }, [engReady, settings.studies]);
   useEffect(() => {
     if (!eng.current || !res) return;
     const ov = toOverlay(res, theme);
     eng.current.setAnalysis(ov.items, { animate: false, pins: ov.pins });
   }, [theme]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // analysis only (no entry/stop/target): the plan layer is hidden on the chart too
+  const showLevels = settings.analysis.showLevels !== false;
   useEffect(() => {
-    if (eng.current) eng.current.setDetail(detail);
-  }, [engReady, detail]);
-  useEffect(() => {
-    if (eng.current) eng.current.setHiddenLayers(hiddenLayers);
+    if (!eng.current) return;
+    const h = new Set(hiddenLayers);
+    if (!showLevels) h.add("plan");
+    eng.current.setHiddenLayers(h);
     localSet("sa_hidden_layers", [...hiddenLayers]);
-  }, [engReady, hiddenLayers]);
+  }, [engReady, hiddenLayers, showLevels]);
   useEffect(() => {
     if (eng.current) eng.current.setShowAlt(showAlt);
   }, [engReady, showAlt]);
   useEffect(() => {
     if (eng.current) eng.current.setDrawingsVisible(drawVisible);
   }, [engReady, drawVisible]);
+  // what the chosen strategies use is what the chart shows (no detail levels to pick from)
+  useEffect(() => {
+    if (eng.current) eng.current.setScope(res && res.layers_scope ? res.layers_scope : null);
+  }, [engReady, res]);
 
   // ───── the saved analysis of a chart comes back when the chart loads
   const showStoredAnalysis = useCallback((d) => {
@@ -231,7 +299,6 @@ export default function Terminal() {
         storeAnalysisLocal(sym, frame, dd.data);
         return;
       }
-      // nothing on the server yet (this browser may have run it before the server saved it): show and save the copy
       const local = readAnalysisLocal(sym, frame);
       if (usable(local)) {
         showStoredAnalysis(local);
@@ -248,14 +315,19 @@ export default function Terminal() {
   const loadChart = useCallback(async (sym, frame, rp) => {
     const e = eng.current;
     if (!e) return;
+    e.replayLock = false;
     if (!rp) replayOverlay.current = null;
     setChartState({ loading: true, error: null });
-    setMeta(null);          // the previous symbol's price and stats go with its chart
-    e.setData([], {});      // hide the previous chart while the new one loads
+    setMeta(null);
+    setHover(null);
+    e.setData([], {});
     setRes(null);
     setStale(false);
     setLayers([]);
+    setExplain(null);
     e.clearAnalysis();
+    e.setStrategyOverlay(null);
+    setStratOverlay(null);
     barsRef.current = 600;
     try {
       const d = await fetchCandles(rp ? { symbol: sym, tf: frame, bars: 600, at: rp.at, ahead: rp.ahead } : { symbol: sym, tf: frame, bars: 600 });
@@ -263,14 +335,17 @@ export default function Terminal() {
       e.setData(d.candles, { tfSec: d.tf_seconds, decimals: d.decimals, label: `${d.display} · ${frame}`, keepWidth: true });
       setMeta(d);
       setChartState({ loading: false, error: null });
-      // a replay analysis stays on its chart, also after a reveal reloads the candles
       const ro = replayOverlay.current;
       if (rp && ro && ro.key === `${sym}|${frame}|${rp.at}`) e.setAnalysis(ro.ov.items, { animate: false, pins: ro.ov.pins });
-      if (!rp) restoreAnalysis(sym, frame);
+      if (!rp) restoreAnalysis(sym, analysisTf(frame));
     } catch (err) {
       if (sym !== symbolRef.current) return;
       e.setData([], {});
       setMeta(null);
+      if (err instanceof ApiError && err.status === 402) {
+        setPaywall({ message: err.message, detail: err.detail });
+        setReplay(null);
+      }
       setChartState({ loading: false, error: err.message || "Couldn't load this chart." });
     }
     const cached = localGet(`sa_draw_${sym}`, null);
@@ -284,11 +359,11 @@ export default function Terminal() {
         setDrawList(e.getDrawings());
       }
     }).catch(() => {});
-  }, []);
+  }, [restoreAnalysis]);
 
   const loadMore = useCallback(async () => {
     const e = eng.current;
-    if (!e || loadingMore.current) return;
+    if (!e || loadingMore.current || e.replayLock) return;
     loadingMore.current = true;
     const want = Math.min(5000, barsRef.current * 2);
     const sym = symbolRef.current;
@@ -317,8 +392,7 @@ export default function Terminal() {
     if (settings.lastSymbol !== symbol || settings.lastTf !== tf) updateSettings({ lastSymbol: symbol, lastTf: tf });
   }, [engReady, symbol, tf, replayKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The whole series again, keeping the view: used when live updates find candles missing (the phone slept, the tab
-  // was in the background, the network dropped), so the chart never keeps a hole until it is reloaded.
+  // The whole series again, keeping the view: used when live updates find candles missing.
   const lastResync = useRef(0);
   const resync = useCallback(async (force = false) => {
     const e = eng.current;
@@ -339,7 +413,6 @@ export default function Terminal() {
   // live updates
   useEffect(() => {
     if (!engReady || chartState.error || chartState.loading || !meta || replayKey !== "live") return undefined;
-    const every = 5000;               // every market (crypto, forex, metals, indices, stocks) refreshes every 5 seconds
     let alive = true;
     const tick = async () => {
       if (document.hidden || !alive) return;
@@ -350,15 +423,14 @@ export default function Terminal() {
         if (upd && upd.gap) resync();
         setMeta((m) => (m ? { ...m, price: d.price } : m));
         const r = resRef.current;
-        if (r && r.candles && d.candles.length) {
+        if (r && r.candles && d.candles.length && r.tf === tf) {
           const lastClosedAnalysed = r.candles[r.candles.length - (r.forming ? 2 : 1)][0];
           const closedNow = d.candles[d.candles.length - 2] ? d.candles[d.candles.length - 2][0] : 0;
           if (closedNow > lastClosedAnalysed) setStale(true);
         }
       } catch { /* keep trying */ }
     };
-    const t = setInterval(tick, every);
-    // back on the page after the phone slept or another tab was open: fill in what was missed straight away
+    const t = setInterval(tick, 5000);
     const onVis = () => {
       if (!document.hidden && alive) resync(true).then(tick);
     };
@@ -376,15 +448,13 @@ export default function Terminal() {
     get("/user/watchlist").then((d) => setWatch(d.symbols || [])).catch(() => {});
   }, []);
 
-  // analysis narration
   useEffect(() => {
     if (!busy) return undefined;
     setStep(0);
-    const t = setInterval(() => setStep((s) => Math.min(ANALYSIS_STEPS.length - 1, s + 1)), 700);
+    const t = setInterval(() => setStep((s) => Math.min(ANALYSIS_STEPS.length - 1, s + 1)), 650);
     return () => clearInterval(t);
   }, [busy]);
 
-  // the replay analysis is drawn on the replay chart: the setup, the levels and the drawings, like a live analysis
   const drawReplayAnalysis = (d, where) => {
     if (!d || !where) {
       replayOverlay.current = null;
@@ -395,6 +465,7 @@ export default function Terminal() {
     replayOverlay.current = { key: `${where.symbol}|${where.tf}|${where.at}`, ov };
     if (!eng.current) return;
     eng.current.setAnalysis(ov.items, { animate: true, pins: ov.pins });
+    eng.current.setScope(d.layers_scope || null);
     if (d.view && d.meta && d.candles && d.candles.length) {
       eng.current.panTo(d.candles[Math.max(0, d.view.x_from)][0], d.candles[d.candles.length - 1][0] + d.meta.tf_seconds * 30);
     }
@@ -404,22 +475,16 @@ export default function Terminal() {
     const e = eng.current;
     setCrossMenu(null);
     if (!e) return;
-    const def = e.drawingDefaults || { color: "#2962ff", width: 2, dash: "solid" };
+    const def = e.drawingDefaults || { color: "#4ea4ff", width: 2, dash: "solid" };
     e.select(e.addDrawing({ type, points: [{ t: at.time, p: at.price }], style: { ...def } }));
   };
   const alertForm = (at, op) => {
     setCrossMenu(null);
     requestAlert({ symbol: symbolRef.current, tf: tfRef.current, price: Number(Number(at.price).toFixed(at.decimals ?? 2)), op });
   };
-  const copyPrice = async (at) => {
+  const copyPrice = (at) => {
     setCrossMenu(null);
-    const p = Number(at.price).toFixed(at.decimals ?? 2);
-    try {
-      await navigator.clipboard.writeText(p);
-      toast(`${p} copied`, "success", 1800);
-    } catch {
-      toast(p, "info");
-    }
+    copyText(Number(at.price).toFixed(at.decimals ?? 2), `Price ${Number(at.price).toFixed(at.decimals ?? 2)}`);
   };
   const alertAt = async (at, op) => {
     setCrossMenu(null);
@@ -433,9 +498,24 @@ export default function Terminal() {
     }
   };
 
+  // "Analyse from this price": both sides from a price on the newest candle
+  const runWhatIf = async (price) => {
+    setCrossMenu(null);
+    setWhatIf({ open: true, busy: true, data: null, error: null });
+    try {
+      const d = await post("/analysis/whatif", { symbol: symbolRef.current, tf: analysisTf(tfRef.current), price: Number(price) });
+      setWhatIf({ open: true, busy: false, data: d, error: null });
+      refresh();
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 402 || e.status === 429)) {
+        setWhatIf({ open: false, busy: false, data: null, error: null });
+        showLimit(e);
+      } else setWhatIf({ open: true, busy: false, data: null, error: e.message || "That check failed." });
+    }
+  };
+
   const analyse = useCallback(async () => {
     if (replayRef.current) {
-      // in a replay the analysis runs for that moment, from the Replay tab
       setTab("replay");
       setPanelOpen(true);
       setPanelHidden(false);
@@ -443,25 +523,27 @@ export default function Terminal() {
       return;
     }
     if (busy || !eng.current || chartState.error) return;
+    const atf = analysisTf(tf);
+    if (atf !== tf) toast(`The analyst reads ${atf}, the nearest standard interval to ${tf}.`, "info", 4000);
     setBusy(true);
     setTab("analysis");
     const a = settings.analysis;
     try {
       const d = await post("/analysis/run", {
-        symbol, tf, account: Number(a.account) || 1000, risk_pct: Number(a.risk_pct) || 1,
+        symbol, tf: atf, account: Number(a.account) || 1000, risk_pct: Number(a.risk_pct) || 1,
         leverage: a.leverage ? Number(a.leverage) : null, mode: a.mode === "auto" ? null : a.mode,
         drawings: toUserDrawings(eng.current.getDrawings()),
       });
-      // saved for its chart even if the user has moved on, so it is there when they come back
-      storeAnalysisLocal(symbol, tf, d);
-      put("/user/analysis", { symbol, tf, data: d }).catch(() => {});
+      storeAnalysisLocal(symbol, atf, d);
+      put("/user/analysis", { symbol, tf: atf, data: d }).catch(() => {});
       if (symbolRef.current !== symbol || tfRef.current !== tf) return;
       setRes(d);
       setStale(false);
       const ov = toOverlay(d, theme);
       setLayers(ov.layers);
+      eng.current.setScope(d.layers_scope || null);
       eng.current.setAnalysis(ov.items, { animate: a.animate !== false, pins: ov.pins });
-      if (d.view && d.candles && d.candles.length) {
+      if (d.view && d.candles && d.candles.length && atf === tf) {
         const from = d.candles[Math.max(0, Math.min(d.candles.length - 1, d.view.x_from))][0];
         const last = d.candles[d.candles.length - 1][0];
         eng.current.panTo(from, last + ((d.meta && d.meta.tf_seconds) || 3600) * 30);
@@ -476,14 +558,16 @@ export default function Terminal() {
     }
   }, [busy, chartState.error, settings.analysis, symbol, tf, theme, narrow, mobile, refresh, toast, showLimit]);
 
-  // Clean analysis: the only thing that removes an analysis from its chart
   const cleanAnalysis = useCallback(() => {
     const sym = symbolRef.current;
-    const frame = tfRef.current;
+    const frame = analysisTf(tfRef.current);
     setRes(null);
     setStale(false);
     setLayers([]);
-    if (eng.current) eng.current.clearAnalysis();
+    if (eng.current) {
+      eng.current.clearAnalysis();
+      eng.current.setScope(null);
+    }
     dropAnalysisLocal(sym, frame);
     del(`/user/analysis?${qs({ symbol: sym, tf: frame })}`).catch(() => {});
     toast("Analysis cleaned from this chart.", "info");
@@ -506,6 +590,7 @@ export default function Terminal() {
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key.toLowerCase() === "a" && !e.repeat) analyse();
+      if (e.key.toLowerCase() === "i" && !e.repeat) setSheet("indicators");
       if (/^[1-9]$/.test(e.key) && !e.repeat && document.activeElement && document.activeElement.tagName === "CANVAS") {
         const t = TFS[Number(e.key) - 1];
         if (t) setTf(t);
@@ -536,6 +621,21 @@ export default function Terminal() {
     setMagnetState(m);
     if (eng.current) eng.current.magnet = m;
   };
+  const setKeepDrawing = (b) => {
+    setKeepDrawingState(b);
+    if (eng.current) eng.current.keepDrawing = b;
+  };
+  const setToolStyle = (st) => {
+    setToolStyleState(st);
+    if (eng.current) eng.current.toolStyle = st;
+  };
+  useEffect(() => {
+    if (eng.current) eng.current.toolStyle = toolStyle;
+  }, [engReady]); // eslint-disable-line react-hooks/exhaustive-deps
+  const toggleLockAll = (b) => {
+    setLockedAll(b);
+    if (eng.current) eng.current.lockAll(b);
+  };
   const toggleWatch = async (s, add) => {
     try {
       const d = add ? await post("/user/watchlist", { symbol: s }) : await del(`/user/watchlist/${encodeURIComponent(s)}`);
@@ -560,13 +660,10 @@ export default function Terminal() {
     else n.add(id);
     return n;
   });
-  const setDetail = (n) => {
-    setDetailState(n);
-    updateSettings({ analysis: { detail: n } });
-  };
   const ask = (q) => {
     setPendingAsk(q);
     setTab("ai");
+    setExplain(null);
     if (narrow) setPanelOpen(true);
   };
   const openTab = (t) => {
@@ -593,26 +690,32 @@ export default function Terminal() {
   const placeTrade = ({ side, entry, sl, tp }) => {
     if (!eng.current || !eng.current.raw.length) return;
     const last = eng.current.raw[eng.current.raw.length - 1].t;
-    const step = (meta && meta.tf_seconds) || 3600;
-    const id = eng.current.addDrawing({ type: side === "short" ? "short" : "long", points: [{ t: last, p: entry }, { t: last + step * 24, p: sl }, { t: last + step * 24, p: tp }], style: {} });
+    const stp = (meta && meta.tf_seconds) || 3600;
+    const id = eng.current.addDrawing({ type: side === "short" ? "short" : "long", points: [{ t: last, p: entry }, { t: last + stp * 24, p: sl }, { t: last + stp * 24, p: tp }], style: {} });
     eng.current.select(id);
   };
 
-  // The AI plan becomes a trade on the chart, with the entry, stop and target as handles the person can drag.
-  // Review (on the trade's toolbar) then grades the levels as they are now.
-  const editPlan = (p) => {
-    const tps = p.tps || [];
-    const tp = tps[Math.min(1, tps.length - 1)];
-    if (!p.entry || !p.sl || !tp) {
-      toast("This plan has no entry, stop and target to edit yet.", "info");
-      return;
+  // Edit: the AI analysis becomes the person's own, with every drawing editable, on the My analysis page
+  const editToDesk = async (p) => {
+    if (!res) return;
+    try {
+      const drawings = aiToDrawings(res, themeRef.current, hiddenLayers).concat((eng.current ? eng.current.getDrawings() : []).map((d) => ({ ...d, style: { ...d.style, mine: true } })));
+      const plan = p && p.entry && p.sl ? { side: p.side, entry: p.entry, sl: p.sl, tps: (p.tps || []).slice(0, 3) } : null;
+      const v = res.verdict || {};
+      const d = await post("/my-analyses", {
+        symbol, tf: res.tf, title: `${res.symbol} · ${res.tf} · ${v.action || "analysis"}`.slice(0, 120), source: "ai",
+        source_analysis_id: res.analysis_id || null, drawings, plan,
+        ai: { action: v.action, headline: v.headline, confidence: v.confidence ? v.confidence.level : null, plan, strategies: res.strategies ? res.strategies.chosen : [] },
+      });
+      toast("Moved to My analysis. Edit anything, then ask the AI to grade it.", "success");
+      router.push(`/desk?id=${d.id}`);
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 402 || e.status === 429)) showLimit(e);
+      else toast(e.message || "Couldn't open it in My analysis.", "error");
     }
-    placeTrade({ side: p.side, entry: p.entry, sl: p.sl, tp });
-    if (narrow) setPanelOpen(false);
-    toast("Drag the entry, stop or target to change the plan, then tap Review to grade your edits.", "info");
   };
 
-  // ───── compare: other markets drawn over this one, on the same timeframe (and the same replay moment)
+  // ───── compare
   const compareKey = compare.map((c) => c.symbol).join(",");
   useEffect(() => {
     localSet("sa_compare", compare.map(({ symbol: s0, color }) => ({ symbol: s0, color })));
@@ -642,10 +745,10 @@ export default function Terminal() {
   };
   const removeCompare = (s0) => setCompare(compare.filter((c) => c.symbol !== s0));
 
-  // ───── chart layouts: the market, timeframe, chart type, indicators, panes and compared markets, saved by name
+  // ───── layouts: market, interval, chart type, indicators, panes and compared markets, saved by name
   const layouts = settings.layouts || [];
   const snapshot = () => ({
-    symbol, tf, style: settings.candles.style, indicators: { ...settings.indicators },
+    symbol, tf, style: settings.candles.style, indicators: { ...settings.indicators }, studies: settings.studies || [],
     chart: Object.fromEntries(LAYOUT_KEYS.map((k) => [k, !!settings.chart[k]])), compare: compare.map((c) => c.symbol),
   });
   const saveLayoutAs = (name) => {
@@ -666,62 +769,125 @@ export default function Terminal() {
     setSheet(null);
   };
   const openLayout = (l) => {
-    updateSettings({ currentLayout: l.id, candles: { style: l.style || "candles" }, indicators: { ...l.indicators }, chart: { ...l.chart } });
+    updateSettings({ currentLayout: l.id, candles: { style: l.style || "candles" }, indicators: { ...l.indicators }, chart: { ...l.chart }, studies: l.studies || [] });
     setCompare((l.compare || []).slice(0, 4).map((s0, i) => ({ symbol: s0, color: COMPARE_COLORS[i] })));
     if (l.symbol) setSymbol(cleanSymbol(l.symbol));
-    if (l.tf && TFS.includes(l.tf)) setTf(l.tf);
+    if (l.tf && ALL_TFS.includes(l.tf)) setTf(l.tf);
     setSheet(null);
     toast(`Opened “${l.name}”.`, "info", 2200);
-  };
-  const newLayout = () => {
-    updateSettings({ currentLayout: null, candles: { style: "candles" }, indicators: { ema20: false, ema50: true, ema200: true, bb: false, vwap: false },
-      chart: { volume: true, rsi: false, logScale: false, grid: false, killzones: false, watermark: true } });
-    setCompare([]);
-    if (eng.current) eng.current.resetView();
-    setSheet(null);
-    toast("New layout: candles, default indicators. Save it from the hub when you're done.", "info");
   };
   const deleteLayout = (id) => updateSettings({ layouts: layouts.filter((l) => l.id !== id), currentLayout: settings.currentLayout === id ? null : settings.currentLayout });
   const renameLayout = (id, name) => updateSettings({ layouts: layouts.map((l) => (l.id === id ? { ...l, name } : l)) });
 
-  // ───── indicator templates
+  // ───── indicator templates (the quick switches and the library studies)
   const templates = settings.indicatorTemplates || [];
   const saveTemplate = (name) => {
-    const next = [...templates.filter((t) => t.name !== name), { name, indicators: { ...settings.indicators }, rsi: !!settings.chart.rsi }].slice(-12);
+    const next = [...templates.filter((t) => t.name !== name), { name, indicators: { ...settings.indicators }, rsi: !!settings.chart.rsi, studies: settings.studies || [] }].slice(-12);
     updateSettings({ indicatorTemplates: next });
     toast(`Indicator set “${name}” saved.`, "success", 2200);
   };
   const applyTemplate = (t) => {
-    updateSettings({ indicators: { ...t.indicators }, chart: { rsi: !!t.rsi } });
+    updateSettings({ indicators: { ...t.indicators }, chart: { rsi: !!t.rsi }, studies: t.studies || [] });
     toast(`“${t.name}” applied.`, "info", 2000);
   };
   const deleteTemplate = (name) => updateSettings({ indicatorTemplates: templates.filter((t) => t.name !== name) });
 
-  // ───── publish an idea: the chart as a picture, shared with the phone's share sheet (or saved), with the plan
-  const publish = async () => {
-    if (!eng.current) return;
+  // ───── a strategy's trades on the chart (Indicators > Strategies)
+  const showStrategy = async (id) => {
+    if (!id) {
+      setStratOverlay(null);
+      if (eng.current) eng.current.setStrategyOverlay(null);
+      return;
+    }
+    try {
+      const d = await get(`/strategies/overlay?${qs({ symbol, tf: analysisTf(tf), id })}`);
+      setStratOverlay(d);
+      if (eng.current) eng.current.setStrategyOverlay(d.items);
+      toast(`${d.name}: ${d.record && d.record.trades ? `${d.record.trades} trades, ${Math.round((d.record.win_rate || 0) * 100)}% won` : "no trades on these candles"}.`, "info", 4000);
+    } catch (e) {
+      toast(e.message || "Couldn't show that strategy.", "error");
+    }
+  };
+
+  // ───── publish an idea to Ideas (and share the picture)
+  const [idea, setIdea] = useState({ title: "", body: "", side: "" });
+  const openPublish = () => {
     setSheet(null);
+    const v = res && res.verdict;
+    setIdea({
+      title: `${(meta && meta.display) || symbol} ${tf}: ${v ? v.action : "my view"}`.slice(0, 140),
+      body: v ? `${v.headline}\n\n${(res.how_to_enter || []).join("\n")}` : "",
+      side: res && res.plan ? res.plan.side : "",
+    });
+    setPublishOpen(true);
+  };
+  const publishIdea = async () => {
+    try {
+      await post("/ideas", { symbol, tf, side: idea.side || null, title: idea.title, body: idea.body,
+        drawings: eng.current ? eng.current.getDrawings() : [], plan: res && res.plan ? { side: res.plan.side, entry: res.plan.entry, sl: res.plan.sl, tps: res.plan.tps } : null,
+        price: meta ? meta.price : null });
+      setPublishOpen(false);
+      toast("Published to Ideas.", "success");
+    } catch (e) {
+      toast(e.message || "Couldn't publish.", "error");
+    }
+  };
+  const shareImage = async () => {
+    if (!eng.current) return;
     const url = eng.current.screenshot();
-    const plan = res && res.plan;
-    const text = [`${(meta && meta.display) || symbol} · ${tf} · StreixAnalyst`,
-      res ? `${res.verdict.action}${plan ? ` · EP ${fmtPrice(plan.entry, dec)} · SL ${fmtPrice(plan.sl, dec)} · TP ${fmtPrice(plan.tps[0], dec)}` : ""}` : null]
-      .filter(Boolean).join("\n");
     try {
       const blob = await (await fetch(url)).blob();
       const file = new File([blob], `${symbol}-${tf}-idea.png`, { type: "image/png" });
       if (navigator.canShare && navigator.canShare({ files: [file] })) {
-        await navigator.share({ files: [file], text, title: `${symbol} ${tf} idea` });
+        await navigator.share({ files: [file], text: idea.title, title: idea.title });
         return;
       }
     } catch (e) {
       if (e && e.name === "AbortError") return;
     }
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `${symbol}-${tf}-idea.png`;
-    a.click();
-    try { await navigator.clipboard.writeText(text); } catch { /* ignore */ }
-    toast("Chart image saved, and the idea's text copied to share.", "success");
+    screenshot();
+  };
+
+  // ───── teachers: show my chart to my students (TV mode: no account size, email or risk settings go out)
+  const isTeacher = !!(user && (user.role === "admin" || (user.org && ["owner", "teacher"].includes(user.org.role))));
+  const isStudent = !!(user && user.org && user.org.role === "member");
+  useEffect(() => {
+    if (!live) return undefined;
+    let alive = true;
+    const push = () => {
+      if (!alive) return;
+      const r = resRef.current;
+      put("/class/live", {
+        symbol: symbolRef.current, tf: tfRef.current, replay: replayRef.current,
+        drawings: eng.current ? eng.current.getDrawings() : [],
+        analysis: r ? { drawings: r.drawings, candles: (r.candles || []).map((c) => [c[0]]), meta: { tf_seconds: r.meta && r.meta.tf_seconds }, layers_scope: r.layers_scope,
+          verdict: { action: r.verdict.action, headline: r.verdict.headline, grade: r.verdict.grade, trade: r.verdict.trade, side: r.verdict.side },
+          plan: r.plan ? { side: r.plan.side, entry: r.plan.entry, sl: r.plan.sl, tps: r.plan.tps, setup: r.plan.setup } : null, tf: r.tf, symbol: r.symbol } : null,
+        view: eng.current && eng.current.d.length ? { right: eng.current.right, spacing: eng.current.spacing } : null,
+      }).catch((e) => {
+        if (e instanceof ApiError && (e.status === 402 || e.status === 403)) {
+          setLive(false);
+          toast(e.message, "error");
+        }
+      });
+    };
+    push();
+    const t = setInterval(push, 4000);
+    return () => {
+      alive = false;
+      clearInterval(t);
+    };
+  }, [live]); // eslint-disable-line react-hooks/exhaustive-deps
+  const toggleLive = async () => {
+    setSheet(null);
+    if (live) {
+      setLive(false);
+      del("/class/live").catch(() => {});
+      toast("Your students no longer see your chart.", "info");
+    } else {
+      setLive(true);
+      toast("Live: your students can watch your chart. Private details stay hidden.", "success", 5000);
+    }
   };
 
   const pickType = (id) => {
@@ -739,8 +905,11 @@ export default function Terminal() {
     setAnalysisOn(on);
     if (eng.current) eng.current.setAnalysisVisible(on);
   };
-  const back = () => setSheet("hub");
+  const back = () => setSheet("toolbox");
   const typeLabel = (CHART_TYPES.find((t) => t.id === settings.candles.style) || {}).label || "Candles";
+  const clearAll = () => {
+    if (window.confirm("Remove all your drawings on this chart?") && eng.current) eng.current.clearDrawings();
+  };
 
   const ent = user && user.entitlements;
   const display = (meta && meta.display) || symbol;
@@ -750,100 +919,103 @@ export default function Terminal() {
   const dayChange = hover && hover.change !== null && hover.change !== undefined ? hover.change : legendCandle && prevClose ? (legendCandle.c / prevClose - 1) * 100 : null;
   const vTone = res ? verdictTone(res.verdict) : null;
   const panelVisible = !narrow ? !panelHidden : panelOpen;
+  const latestTime = eng.current && eng.current.d.length ? eng.current.d[eng.current.d.length - 1].t : null;
+  const favTfs = (settings.intervalFavorites || []).filter((t) => ALL_TFS.includes(t));
+  const favTools = (settings.toolFavorites || ["trendline", "hline", "rect", "fib", "long"]).slice(0, mobile ? 4 : 8);
+
+  const toolboxAct = {
+    types: () => setSheet("types"),
+    indicators: () => setSheet("indicators"),
+    interval: () => setSheet("interval"),
+    strategies: () => { setSheet(null); setPicker(true); },
+    fit: () => { setSheet(null); setPicker(true); },
+    replay: () => { setSheet(null); openTab("replay"); },
+    news: () => { setSheet(null); openTab("news"); },
+    review: () => { setSheet(null); setReview({ open: true, prefill: null }); },
+    alerts: () => { setSheet(null); requestAlert({ list: true }); },
+    publish: openPublish,
+    golive: toggleLive,
+    image: () => { setSheet(null); screenshot(); },
+  };
 
   const panelContent = (
     <>
-      {narrow ? (
-        <div className="tabs" role="tablist">
-          {TABS.map(([id, label, icon]) => (
-            <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)}>
-              <Icon name={icon} /> <span>{label}</span>
-            </button>
-          ))}
+      <div className="tabs" role="tablist">
+        {TABS.map(([id, label, icon]) => (
+          <button key={id} role="tab" aria-selected={tab === id} className={tab === id ? "on" : ""} onClick={() => setTab(id)} title={label}>
+            <Icon name={icon} /> <span>{label}</span>
+          </button>
+        ))}
+        {narrow ? (
           <button onClick={() => setPanelOpen(false)} aria-label="Close panel" style={{ flex: "none", width: 40 }}><Icon name="x" /></button>
-        </div>
-      ) : null}
+        ) : (
+          <button onClick={() => setPanelHidden(true)} aria-label="Hide panel" title="Hide panel" style={{ flex: "none", width: 36 }}><Icon name="chevronRight" /></button>
+        )}
+      </div>
       <div className={`panel-body ${tab === "ai" || tab === "watchlist" ? "flush" : ""}`} style={tab === "ai" ? { overflow: "hidden", display: "flex", flexDirection: "column" } : undefined}>
         {tab === "analysis" ? (
-          <AnalysisPanel res={res} busy={busy} step={step} steps={ANALYSIS_STEPS} onAnalyse={analyse} onAsk={ask} onClean={cleanAnalysis} onUpgrade={() => setPaywall({ message: "Upgrade to Pro for both report styles and the model statistics." })}
-            hiddenLayers={hiddenLayers} toggleLayer={toggleLayer} layers={layers} detail={detail} setDetail={setDetail} showAlt={showAlt}
-            setShowAlt={(b) => { setShowAlt(b); updateSettings({ analysis: { showAlt: b } }); }} stale={stale} symbolLabel={display} tf={tf} symbol={symbol}
-            onEditPlan={editPlan} />
+          <AnalysisPanel res={res} busy={busy} step={step} steps={ANALYSIS_STEPS} onAnalyse={analyse} onAsk={ask} onClean={cleanAnalysis}
+            onUpgrade={() => setPaywall({ message: "Upgrade to Pro for both report styles and the model statistics." })}
+            hiddenLayers={hiddenLayers} toggleLayer={toggleLayer} layers={layers} showAlt={showAlt}
+            setShowAlt={(b) => { setShowAlt(b); updateSettings({ analysis: { showAlt: b } }); }} stale={stale} symbolLabel={display} tf={analysisTf(tf)} symbol={symbol}
+            onEditPlan={editToDesk} onStrategies={() => setPicker(true)} />
         ) : null}
         {tab === "ai" ? (
-          <AIChat symbol={symbol} tf={tf} analysisId={res && res.analysis_id} pending={pendingAsk} clearPending={() => setPendingAsk(null)} onLimit={showLimit} />
+          <AIChat symbol={symbol} tf={analysisTf(tf)} analysisId={res && res.analysis_id} pending={pendingAsk} clearPending={() => setPendingAsk(null)} onLimit={showLimit} />
         ) : null}
         {tab === "watchlist" ? (
           <Watchlist symbols={watch} current={symbol} onPick={pickSymbol} onRemove={(s) => toggleWatch(s, false)} onAdd={() => setSearchOpen(true)} onMove={moveWatch} />
         ) : null}
-        {tab === "news" ? <NewsPanel symbol={symbol} tf={tf} /> : null}
-        {tab === "divergence" ? <DivergencePanel symbol={symbol} tf={tf} /> : null}
-        {tab === "replay" ? <ReplayPanel symbol={symbol} tf={tf} replay={replay} setReplay={setReplay} onAnalysis={drawReplayAnalysis} /> : null}
+        {tab === "news" ? <NewsPanel symbol={symbol} tf={analysisTf(tf)} /> : null}
+        {tab === "divergence" ? <DivergencePanel symbol={symbol} tf={analysisTf(tf)} /> : null}
+        {tab === "replay" ? <ReplayPanel symbol={symbol} tf={tf} replay={replay} setReplay={setReplay} onAnalysis={drawReplayAnalysis} onLimit={showLimit}
+          chartType={settings.candles.style} onChartType={() => setSheet("types")} eng={eng} /> : null}
       </div>
     </>
   );
 
   return (
-    <div className={`term${narrow ? "" : " term-desk"}`} data-tv={scale > 1 ? "1" : undefined}>
+    <div className={`term${narrow ? "" : " term-desk"}${live ? " is-live" : ""}`} data-tv={scale > 1 ? "1" : undefined}>
       <header className="topbar">
-        {mobile ? (width >= 400 ? <Link href="/" aria-label="Home"><Mark size={34} /></Link> : null) : <Brand href="/" size={34} compact={width < 1300} />}
+        {mobile ? null : <Brand href="/" size={30} compact={width < 1300} />}
         {!mobile ? <span className="sep" /> : null}
-        <button className="symbol-btn" data-tour="market" onClick={() => setSearchOpen(true)} aria-label="Change market">
-          <Icon name="search" size={16} style={{ color: "var(--text-3)", flex: "none" }} />
-          <span className="sym">{display}</span>
+        <button className="mkt-chip" data-tour="market" onClick={() => setSearchOpen(true)} aria-label={`Market: ${display}. Change market`}>
+          <span className="mkt-sym">{display}</span>
+          {meta && !mobile ? <span className={`mkt-px num ${dayChange !== null && dayChange < 0 ? "down" : "up"}`}>{fmtPrice(meta.price, dec)}</span> : null}
           {meta && meta.perp ? <span className="badge violet hide-mobile">PERP</span> : null}
+          <Icon name="chevronDown" size={14} />
         </button>
-        {mobile ? (
-          <select className="select sm" style={{ width: 62, flex: "none", paddingLeft: 8, paddingRight: 22, backgroundPosition: "calc(100% - 13px) 50%, calc(100% - 8px) 50%" }} data-tour="timeframe" value={tf} onChange={(e) => setTf(e.target.value)} aria-label="Timeframe">
-            {TFS.map((t) => <option key={t} value={t}>{t}</option>)}
-          </select>
-        ) : (
-          <div className="tf-pills" data-tour="timeframe" role="radiogroup" aria-label="Timeframe">
-            {TFS.map((t) => (
+        <IntervalChip tf={tf} onClick={() => setSheet("interval")} />
+        {!mobile && favTfs.length ? (
+          <div className="tf-favs" role="radiogroup" aria-label="Favourite intervals">
+            {favTfs.map((t) => (
               <button key={t} className={tf === t ? "on" : ""} onClick={() => setTf(t)} role="radio" aria-checked={tf === t} title={TF_LABEL[t]}>{t}</button>
             ))}
           </div>
-        )}
-        {!mobile ? (
-          <Link className="icon-btn" href={`/strategy?s=${encodeURIComponent(symbol)}&tf=${tf}`} data-tour="strategy"
-            title="Test a strategy on this market" aria-label="Test a strategy on this market"
-            style={{ display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-            <Icon name="sliders" size={16} />
-          </Link>
         ) : null}
-        <button className="icon-btn" onClick={() => setSheet("types")} title={`Chart type: ${typeLabel}`} aria-label={`Chart type: ${typeLabel}`}>
-          <ChartTypeIcon id={settings.candles.style} size={19} />
-        </button>
-        <button className="icon-btn" onClick={() => setSheet("hub")} title="Analysis hub" aria-label="Analysis hub" data-tour="hub">
-          <Icon name="more" />
-        </button>
+        <StrategyChip user={user} onClick={() => setPicker(true)} compact={mobile} />
         {!mobile ? (
           <>
-            <span className="sep" />
-            <div style={{ position: "relative" }}>
-              <button className="icon-btn" onClick={() => setMenu(menu === "apps" ? null : "apps")} title="Workspaces"><Icon name="grid" /></button>
-              <Menu open={menu === "apps"} onClose={() => setMenu(null)} anchorStyle={{ top: 42, left: 0, width: 260 }}>
-                <div className="mh">Workspaces</div>
-                {APP_LINKS.filter(([href]) => href !== "/terminal").map(([href, label, ic]) => (
-                  <Link key={href} href={href === "/track-record" ? href : `${href}?s=${encodeURIComponent(symbol)}&tf=${tf}`}><Icon name={ic} size={16} /> {label}</Link>
-                ))}
-                <Link href={`/tv?s=${encodeURIComponent(symbol)}&tf=${tf}`}><Icon name="tv" size={16} /> TV / presentation mode</Link>
-              </Menu>
-            </div>
-            <button className="icon-btn" onClick={() => setSheet("indicators")} title="Indicators" aria-label="Indicators"><Icon name="indicator" /></button>
+            <button className="icon-btn" onClick={() => setSheet("types")} title={`Chart type: ${typeLabel}`} aria-label={`Chart type: ${typeLabel}`}>
+              <ChartTypeIcon id={settings.candles.style} size={19} />
+            </button>
+            <button className="icon-btn" onClick={() => setSheet("indicators")} title="Indicators (I)" aria-label="Indicators"><Icon name="indicator" /></button>
           </>
         ) : null}
+        <button className="icon-btn" onClick={() => setSheet("toolbox")} title="Toolbox" aria-label="Toolbox" data-tour="hub">
+          <Icon name="grid" />
+        </button>
         <div className="grow" />
-        {!mobile && ent && ent.tier === "trial" ? <Link href="/billing" className="trial-chip hide-mobile" title="Your free trial">✦ Trial · {ent.trial_days_left}d left</Link> : null}
-        {!mobile && user && user.streak_days > 1 ? <span className="streak hide-mobile" title="Days in a row"><Icon name="flame" size={15} /> {user.streak_days}</span> : null}
+        {live ? <button className="live-pill" onClick={toggleLive} title="Your students can see your chart. Tap to stop."><i /> Live</button> : null}
+        {!mobile && ent && ent.tier === "trial" ? <Link href="/billing" className="trial-chip hide-mobile" title="Your free trial">Trial · {ent.trial_days_left}d left</Link> : null}
         {!mobile ? (
-          <button className="btn sm hide-mobile" onClick={() => setReview({ open: true, prefill: null })} title="Grade your own trade idea"><Icon name="review" size={15} /> Review</button>
-        ) : null}
-        {!mobile ? (
-          <button className={`btn primary analyse-btn ${busy ? "busy" : ""}`} data-tour="analyse" onClick={analyse} disabled={busy || !!chartState.error} title="Analyse this chart (A)">
-            {busy ? <span className="spinner" /> : <Icon name="zap" size={17} />}
-            <span>{busy ? "Analysing" : "Analyse"}</span>
-          </button>
+          <>
+            <Link className="btn sm ghost" href="/desk" title="My analysis" data-tour="desk"><Icon name="book" size={15} /> My analysis</Link>
+            <button className={`btn primary analyse-btn ${busy ? "busy" : ""}`} data-tour="analyse" onClick={analyse} disabled={busy || !!chartState.error} title="Analyse this chart (A)">
+              {busy ? <span className="spinner" /> : <Icon name="zap" size={17} />}
+              <span>{busy ? "Analysing" : "Analyse"}</span>
+            </button>
+          </>
         ) : null}
         {narrow && !mobile ? (
           <button className="icon-btn" onClick={() => setPanelOpen(!panelOpen)} title="Panel"><Icon name="menu" /></button>
@@ -860,18 +1032,18 @@ export default function Terminal() {
               {ent ? <div style={{ marginTop: 6 }}><span className="badge brand" style={{ textTransform: "capitalize" }}>{ent.tier}{ent.tier === "trial" ? ` · ${ent.trial_days_left} days left` : ""}</span></div> : null}
             </div>
             <hr />
+            <Link href="/desk"><Icon name="book" size={16} /> My analysis</Link>
+            <Link href="/markets"><Icon name="globe" size={16} /> Markets & ideas</Link>
             <Link href={`/practice?s=${encodeURIComponent(symbol)}&tf=${["15m", "1h", "4h", "1D"].includes(tf) ? tf : "1h"}`}><Icon name="target" size={16} /> Draw & score this chart</Link>
-            <Link href={`/strategy?s=${encodeURIComponent(symbol)}&tf=${tf}`}><Icon name="sliders" size={16} /> Strategy lab</Link>
+            <Link href={`/strategy?s=${encodeURIComponent(symbol)}&tf=${analysisTf(tf)}`}><Icon name="sliders" size={16} /> Strategy lab</Link>
             <Link href="/track-record"><Icon name="shield" size={16} /> Track record</Link>
+            {isStudent ? <Link href="/class"><Icon name="users" size={16} /> Watch my teacher</Link> : null}
             <hr />
-            {mobile ? <button onClick={() => { setMenu(null); setReview({ open: true, prefill: null }); }}><Icon name="review" size={16} /> Review a trade</button> : null}
-            {mobile ? <button onClick={() => { setMenu(null); openTab("news"); }}><Icon name="news" size={16} /> News & calendar</button> : null}
+            <button onClick={() => { setMenu(null); setPicker(true); }}><Icon name="target" size={16} /> My strategies</button>
             <Link href="/settings"><Icon name="settings" size={16} /> Settings</Link>
             <Link href="/billing"><Icon name="card" size={16} /> Plan & billing</Link>
-            <Link href={`/tv?s=${encodeURIComponent(symbol)}&tf=${tf}`}><Icon name="tv" size={16} /> TV / presentation mode</Link>
             {user && user.role === "admin" ? <Link href="/admin"><Icon name="shield" size={16} /> Admin</Link> : null}
             <hr />
-            <button onClick={() => { setMenu(null); screenshot(); }}><Icon name="camera" size={16} /> Save chart image</button>
             {!mobile ? <button onClick={() => { setMenu(null); goFullscreen(); }}><Icon name={fullscreen ? "minimize" : "maximize"} size={16} /> {fullscreen ? "Exit full screen" : "Full screen"}</button> : null}
             <button onClick={() => updateSettings({ theme: settings.theme === "light" ? "dark" : "light" })}>
               <Icon name={settings.theme === "light" ? "moon" : "sun"} size={16} /> {settings.theme === "light" ? "Dark" : "Light"} interface
@@ -884,16 +1056,11 @@ export default function Terminal() {
       </header>
 
       <div className={`term-body ${panelHidden && !narrow ? "no-panel" : ""}`}>
-        {!mobile ? (
-          <DrawToolbar tool={tool} setTool={setTool} magnet={magnet} setMagnet={setMagnet} visible={drawVisible} setVisible={setDrawVisible}
-            onUndo={() => eng.current && eng.current.undo()} onRedo={() => eng.current && eng.current.redo()}
-            onClear={() => { if (window.confirm("Remove all your drawings on this chart?")) eng.current && eng.current.clearDrawings(); }} />
-        ) : null}
         <div className="chart-wrap" style={{ "--chart-bg": theme.bg }}>
           <ChartView onReady={onReady} onEvent={onEvent} scale={scale} />
           <div className="legend">
             <div className="l1">
-              <b>{display}</b><span className="faint">{TF_LABEL[tf]}{meta ? ` · ${meta.source}` : ""}</span>
+              <b>{display}</b><span className="faint">{TF_LABEL[tf] || tf}{meta ? ` · ${meta.source}` : ""}</span>
             </div>
             {legendCandle ? (
               <div className="ohlc num">
@@ -902,11 +1069,11 @@ export default function Terminal() {
                 {dayChange !== null ? <span className={dayChange >= 0 ? "up" : "down"}>{fmtChange(dayChange)}</span> : null}
               </div>
             ) : null}
-            {hover && !mobile ? (
+            {hover && hover.studies && hover.studies.length ? (
               <div className="ind num">
-                {settings.indicators.ema50 && hover.ema50 ? <span style={{ color: "#ffb020" }}>EMA50 {fmtPrice(hover.ema50, dec)}</span> : null}
-                {settings.indicators.ema200 && hover.ema200 ? <span style={{ color: "#b78bff" }}>EMA200 {fmtPrice(hover.ema200, dec)}</span> : null}
-                {settings.chart.rsi && hover.rsi ? <span style={{ color: "#b388ff" }}>RSI {hover.rsi.toFixed(1)}</span> : null}
+                {hover.studies.filter((s) => s.kind === "overlay" && s.vals.length).slice(0, 4).map((s) => (
+                  <span key={s.key} style={{ color: s.vals[0].color }}>{s.name} {s.vals.slice(0, 3).map((v) => fmtPrice(v.v, dec)).join(" ")}</span>
+                ))}
               </div>
             ) : null}
           </div>
@@ -918,34 +1085,25 @@ export default function Terminal() {
           ) : null}
           <div className="chart-fab">
             {mobile ? (
-              <button className={`icon-btn glass ${drawMobile ? "active" : ""}`} onClick={() => setDrawMobile(!drawMobile)} aria-label="Drawing tools"><Icon name="pen" /></button>
-            ) : null}
-            {res ? (
-              <div className="seg brand glass detail-seg" title="How much the analyst draws">
-                {[[1, mobile ? "Key" : "Essentials"], [2, mobile ? "More" : "Normal"], [3, "All"]].map(([n, l]) => (
-                  <button key={n} className={detail === n ? "on" : ""} onClick={() => setDetail(n)}>{l}</button>
-                ))}
-              </div>
+              <button className={`icon-btn glass ${drawMobile ? "active" : ""}`} onClick={() => setDrawMobile(!drawMobile)} aria-label="Drawing tools" data-tour="tools"><Icon name="pen" /></button>
             ) : null}
             {!mobile && panelHidden ? (
               <button className="btn sm glass" onClick={() => setPanelHidden(false)}><Icon name="chevronLeft" size={15} /> Panel</button>
             ) : null}
           </div>
-          {/* size the chart like TradingView: width is the candles along time, height is the price scale */}
-          <div className="seg brand glass chart-zoom" role="group" aria-label="Chart size">
+          <div className="seg glass chart-zoom" role="group" aria-label="Chart size">
             <button onClick={() => eng.current && eng.current.zoom(0.8)} title="Narrower candles" aria-label="Narrower candles">↔−</button>
             <button onClick={() => eng.current && eng.current.zoom(1.25)} title="Wider candles" aria-label="Wider candles">↔+</button>
             <i className="zsep" />
-            <button onClick={() => eng.current && eng.current.zoomY(0.8)} title="Shorter price scale (zoom out)" aria-label="Shorter price scale">↕−</button>
-            <button onClick={() => eng.current && eng.current.zoomY(1.25)} title="Taller price scale (zoom in)" aria-label="Taller price scale">↕+</button>
+            <button onClick={() => eng.current && eng.current.zoomY(0.8)} title="Shorter price scale" aria-label="Shorter price scale">↕−</button>
+            <button onClick={() => eng.current && eng.current.zoomY(1.25)} title="Taller price scale" aria-label="Taller price scale">↕+</button>
             <i className="zsep" />
             <button onClick={() => eng.current && eng.current.resetView()} title="Fit the chart" aria-label="Fit the chart"><Icon name="fit" size={14} /></button>
           </div>
-          {mobile ? (
-            <DrawToolbar tool={tool} setTool={setTool} magnet={magnet} setMagnet={setMagnet} visible={drawVisible} setVisible={setDrawVisible}
-              onUndo={() => eng.current && eng.current.undo()} onRedo={() => eng.current && eng.current.redo()} mobileHidden={!drawMobile}
-              onClear={() => { if (window.confirm("Remove all your drawings on this chart?")) eng.current && eng.current.clearDrawings(); }} />
-          ) : null}
+          <ToolDock tool={tool} setTool={setTool} favorites={favTools} onStudio={() => setSheet("studio")} magnet={magnet} setMagnet={setMagnet}
+            keep={keepDrawing} setKeep={setKeepDrawing} locked={lockedAll} setLocked={toggleLockAll} visible={drawVisible} setVisible={setDrawVisible}
+            onUndo={() => eng.current && eng.current.undo()} onRedo={() => eng.current && eng.current.redo()} onClear={clearAll} hidden={mobile && !drawMobile} />
+          <FromHereChip hover={replay ? null : hover} decimals={dec} onPick={runWhatIf} />
           {busy ? (
             <>
               <div className="scanline" />
@@ -975,20 +1133,14 @@ export default function Terminal() {
             </div>
           ) : null}
           {mobile && res && !panelOpen && !busy ? (
-            <button className={`verdict ${vTone}`} onClick={() => openTab("analysis")}
-              style={{ position: "absolute", left: 10, right: 10, bottom: drawMobile ? 92 : 34, zIndex: 8, textAlign: "left", padding: 12, color: "var(--text)",
-                backgroundColor: "var(--panel-solid)", boxShadow: "var(--shadow)" }}>
-              <div className="row">
-                <div className="grow">
-                  <b style={{ fontFamily: "var(--font-display)" }}>{res.verdict.action}</b>
-                  {res.plan ? (
-                    <div className="num faint" style={{ fontSize: "0.8rem" }}>
-                      EP {fmtPrice(res.plan.entry, dec)} · SL {fmtPrice(res.plan.sl, dec)} · TP {fmtPrice(res.plan.tps[0], dec)}
-                    </div>
-                  ) : null}
-                </div>
-                <span className={`grade ${gradeClass(res.verdict.grade)}`} style={{ width: 36, height: 36 }}>{res.verdict.grade}</span>
+            <button className={`verdict-pill ${vTone}`} onClick={() => openTab("analysis")} style={{ bottom: drawMobile ? 70 : 34 }}>
+              <div className="grow">
+                <b>{showLevels ? res.verdict.action : res.verdict.side === "long" ? "Leaning up" : res.verdict.side === "short" ? "Leaning down" : "No clear edge"}</b>
+                {res.plan && showLevels ? (
+                  <div className="num faint" style={{ fontSize: "0.78rem" }}>EP {fmtPrice(res.plan.entry, dec)} · SL {fmtPrice(res.plan.sl, dec)} · TP {fmtPrice(res.plan.tps[0], dec)}</div>
+                ) : <div className="faint" style={{ fontSize: "0.78rem" }}>{res.verdict.confidence ? `${res.verdict.confidence.level} confidence` : ""}</div>}
               </div>
+              {showLevels ? <span className={`grade ${gradeClass(res.verdict.grade)}`} style={{ width: 34, height: 34 }}>{res.verdict.grade}</span> : null}
             </button>
           ) : null}
           {meta && !chartState.loading ? (
@@ -996,7 +1148,7 @@ export default function Terminal() {
               {replay ? (
                 <>
                   <span className="live-dot" style={{ background: "var(--warn)" }} /> Replay · {utcLabel(replay.at)}{replay.ahead ? " · future shown" : " · future hidden"}
-                  <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => setReplay(null)}>Back to live</button>
+                  <button className="btn sm" style={{ marginLeft: 8, pointerEvents: "auto" }} onClick={() => setReplay(null)}>Back to live</button>
                 </>
               ) : (
                 <><span className="live-dot" /> Live · {meta.source}</>
@@ -1007,60 +1159,46 @@ export default function Terminal() {
         <aside className={`rpanel ${panelVisible ? "open" : ""} ${narrow && tab === "replay" ? "sheet" : ""}`} aria-label="Analysis and tools" style={!narrow && panelHidden ? { display: "none" } : undefined}>
           {panelContent}
         </aside>
-        {!narrow ? (
-          <nav className="widget-bar" aria-label="Panels">
-            {TABS.map(([id, label, icon]) => {
-              const on = tab === id && !panelHidden;
-              return (
-                <button key={id} title={label} aria-label={label} aria-pressed={on} className={on ? "on" : ""}
-                  onClick={() => { if (on) setPanelHidden(true); else { setTab(id); setPanelHidden(false); } }}>
-                  <Icon name={icon} size={18} />
-                </button>
-              );
-            })}
-            <span className="grow" />
-            <button title={panelHidden ? "Show panel" : "Hide panel"} aria-label={panelHidden ? "Show panel" : "Hide panel"} onClick={() => setPanelHidden(!panelHidden)}>
-              <Icon name={panelHidden ? "chevronLeft" : "chevronRight"} size={16} />
-            </button>
-          </nav>
-        ) : null}
       </div>
-
-      {!narrow ? (
-        <footer className="term-status">
-          <span className="live-dot" style={replay ? { background: "var(--warn)" } : undefined} />
-          <span>{replay ? `Replay · ${utcLabel(replay.at)}` : "Live"}</span>
-          {meta ? <span className="faint">{meta.source}</span> : null}
-          <span className="grow" />
-          <span className="faint">{display} · {TF_LABEL[tf]}</span>
-        </footer>
-      ) : null}
 
       {mobile ? (
         <nav className="bottom-nav" aria-label="Sections">
+          <Link href="/markets" className=""><Icon name="globe" /><span>Markets</span></Link>
           <button className={!panelOpen ? "on" : ""} onClick={() => setPanelOpen(false)}><Icon name="candles" /><span>Chart</span></button>
-          <button className={panelOpen && tab === "watchlist" ? "on" : ""} onClick={() => openTab("watchlist")}><Icon name="list" /><span>Watchlist</span></button>
           <button className="fab" data-tour="analyse" onClick={analyse} aria-label="Analyse"><span className="ring">{busy ? <span className="spinner" /> : <Icon name="zap" size={20} />}</span><span>Analyse</span></button>
-          <button className={panelOpen && tab === "replay" ? "on" : ""} onClick={() => openTab("replay")}><Icon name="clock" /><span>Replay</span></button>
-          <button className={panelOpen && tab === "ai" ? "on" : ""} onClick={() => openTab("ai")}><Icon name="sparkles" /><span>StreixAI</span></button>
+          <Link href="/desk" data-tour="desk"><Icon name="book" /><span>My analysis</span></Link>
+          <button className={panelOpen && tab !== "analysis" ? "on" : ""} onClick={() => openTab(tab === "analysis" ? "ai" : tab)}><Icon name="sparkles" /><span>StreixAI</span></button>
         </nav>
       ) : null}
 
       <CrossMenu at={crossMenu} onClose={() => setCrossMenu(null)} onLine={(at) => lineAt(at, "hline")} onRay={(at) => lineAt(at, "hray")}
-        onAlert={alertAt} onAlertForm={alertForm} onCopy={copyPrice} symbolLabel={display} last={meta ? meta.price : null} />
+        onAlert={alertAt} onAlertForm={alertForm} onCopy={copyPrice} symbolLabel={display} last={meta ? meta.price : null}
+        latestTime={replay ? null : latestTime} onWhatIf={(at) => runWhatIf(at.price)} />
+      <ExplainCard data={explain} onClose={() => setExplain(null)} onCopy={(t, w) => { copyText(t, w); setExplain(null); }} onAsk={ask} />
+      <WhatIfSheet open={whatIf.open} onClose={() => setWhatIf({ open: false, busy: false, data: null, error: null })} data={whatIf.data} busy={whatIf.busy} error={whatIf.error}
+        onUse={(s) => { placeTrade({ side: s.side, entry: s.entry, sl: s.sl, tp: s.tps[Math.min(1, s.tps.length - 1)] }); setWhatIf({ open: false, busy: false, data: null, error: null }); }} />
+      <StrategyPicker open={picker} onClose={() => setPicker(false)} symbol={symbol} tf={analysisTf(tf)} forced={!!(user && user.needs_strategies)}
+        onSaved={() => { if (res) toast("Analyse again to use your new strategies.", "info", 3500); }} />
+      <Toolbox open={sheet === "toolbox"} onClose={() => setSheet(null)} go={setSheet} act={toolboxAct} symbol={symbol} tf={tf}
+        teacher={isTeacher} student={isStudent} live={live} />
+      <IntervalSheet open={sheet === "interval"} onClose={() => setSheet(null)} value={tf} onPick={setTf}
+        favorites={settings.intervalFavorites || []} onFavorites={(f) => updateSettings({ intervalFavorites: f })}
+        onRange={(r) => eng.current && eng.current.showRange(r)} onGoTo={(t) => eng.current && eng.current.goTo(t)} />
+      <DrawingStudio open={sheet === "studio"} onClose={() => setSheet(null)} tool={tool} setTool={setTool}
+        favorites={settings.toolFavorites || ["trendline", "hline", "rect", "fib", "long"]} onFavorites={(f) => updateSettings({ toolFavorites: f })}
+        toolStyle={toolStyle} setToolStyle={setToolStyle} />
+      <IndicatorSheet open={sheet === "indicators" || sheet === "templates"} startTab={sheet === "templates" ? "templates" : "library"} onClose={() => setSheet(null)}
+        studies={settings.studies || []} setStudies={(list) => updateSettings({ studies: list })}
+        legacy={{ ...settings.indicators, rsi: settings.chart.rsi }} setLegacy={(k, v) => (k === "rsi" ? updateSettings({ chart: { rsi: v } }) : updateSettings({ indicators: { [k]: v } }))}
+        templates={templates} onSaveTemplate={saveTemplate} onApplyTemplate={applyTemplate} onDeleteTemplate={deleteTemplate}
+        strategyOverlay={stratOverlay} onStrategy={showStrategy} />
       <ChartTypeSheet open={sheet === "types"} onClose={() => setSheet(null)} value={settings.candles.style} onPick={pickType}
         favorites={settings.chartFavorites || []} onFavorites={(f) => updateSettings({ chartFavorites: f })}
         onUnavailable={(t) => toast(t.needs, "info", 6000)} tipSeen={!!settings.chartTypeTipSeen} onTipSeen={() => updateSettings({ chartTypeTipSeen: true })} />
-      <AnalysisHub open={sheet === "hub"} onClose={() => setSheet(null)} go={setSheet} symbol={symbol} tf={tf}
-        act={{ newLayout, saveLayout, publish, note: (m) => toast(m, "info", 6000),
-          alerts: () => { setSheet(null); requestAlert({ list: true }); },
-          replay: () => { setSheet(null); openTab("replay"); } }} />
       <LayoutPanel open={sheet === "layout"} onClose={() => setSheet(null)} onBack={back} settings={settings} update={updateSettings}
         panelHidden={panelHidden} setPanelHidden={setPanelHidden} narrow={narrow} />
       <LayoutsPanel open={sheet === "layouts"} onClose={() => setSheet(null)} onBack={back} layouts={layouts} current={settings.currentLayout}
-        onOpen={openLayout} onDelete={deleteLayout} onSaveAs={saveLayoutAs} onRename={renameLayout} />
-      <IndicatorsPanel open={sheet === "indicators" || sheet === "templates"} templatesOnly={sheet === "templates"} onClose={() => setSheet(null)} onBack={back}
-        settings={settings} update={updateSettings} templates={templates} onSaveTemplate={saveTemplate} onApplyTemplate={applyTemplate} onDeleteTemplate={deleteTemplate} />
+        onOpen={openLayout} onDelete={deleteLayout} onSaveAs={saveLayoutAs} onRename={renameLayout} onSave={saveLayout} />
       <ComparePanel open={sheet === "compare"} onClose={() => setSheet(null)} onBack={back} compare={compare} onAdd={addCompare} onRemove={removeCompare} symbol={display} />
       <ObjectTreePanel open={sheet === "objects"} onClose={() => setSheet(null)} onBack={back} drawings={drawList} decimals={dec}
         onSelect={objectAct.select} onToggle={objectAct.toggle} onLock={objectAct.lock} onDelete={objectAct.del}
@@ -1069,9 +1207,25 @@ export default function Terminal() {
       <TechnicalsPanel open={sheet === "technicals"} onClose={() => setSheet(null)} onBack={back} candles={eng.current ? eng.current.raw : []}
         symbol={display} tf={tf} decimals={dec} />
       <BrokerPanel open={sheet === "broker"} onClose={() => setSheet(null)} onBack={back} meta={meta} symbol={display} plan={res && res.plan} decimals={dec} toast={toast} />
-      <ReviewModal open={review.open} onClose={() => setReview({ open: false, prefill: null })} symbol={symbol} tf={tf} prefill={review.prefill}
+      <ReviewModal open={review.open} onClose={() => setReview({ open: false, prefill: null })} symbol={symbol} tf={analysisTf(tf)} prefill={review.prefill}
         price={meta && meta.price} decimals={dec} settings={settings} onLimit={showLimit} onShowOnChart={placeTrade} />
       <Paywall open={!!paywall} onClose={() => setPaywall(null)} info={paywall} />
+      <Modal open={publishOpen} onClose={() => setPublishOpen(false)} title="Publish an idea">
+        <form className="stack" onSubmit={(e) => { e.preventDefault(); publishIdea(); }}>
+          <div className="field"><label>Title</label><input className="input" value={idea.title} onChange={(e) => setIdea({ ...idea, title: e.target.value })} maxLength={140} required minLength={3} /></div>
+          <div className="field"><label>Direction</label>
+            <div className="seg">
+              {[["", "Education"], ["long", "Long"], ["short", "Short"]].map(([v, l]) => <button type="button" key={l} className={idea.side === v ? "on" : ""} onClick={() => setIdea({ ...idea, side: v })}>{l}</button>)}
+            </div>
+          </div>
+          <div className="field"><label>Your reasoning</label><textarea className="textarea" rows={6} value={idea.body} onChange={(e) => setIdea({ ...idea, body: e.target.value })} maxLength={6000} /></div>
+          <div className="hint">Your drawings on this chart are published with it. Ideas are public to every StreixAnalyst user.</div>
+          <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
+            <button type="button" className="btn" onClick={shareImage}><Icon name="camera" size={15} /> Share image</button>
+            <button className="btn primary"><Icon name="upload" size={15} /> Publish</button>
+          </div>
+        </form>
+      </Modal>
       <Modal open={!!textEdit} onClose={() => {
         if (textEdit && eng.current) {
           const d = eng.current.drawings.find((x) => x.id === textEdit.id);
@@ -1091,7 +1245,7 @@ export default function Terminal() {
             setTextEdit(null);
           }} className="stack">
             <input className="input" autoFocus maxLength={80} value={textEdit.value} onChange={(e) => setTextEdit({ ...textEdit, value: e.target.value })}
-              placeholder="e.g. Liquidity above — wait for the sweep" />
+              placeholder="e.g. Liquidity above: wait for the sweep" />
             <div className="row" style={{ justifyContent: "flex-end" }}><button className="btn primary">Save</button></div>
           </form>
         ) : null}

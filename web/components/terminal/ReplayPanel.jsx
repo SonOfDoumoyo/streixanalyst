@@ -1,10 +1,14 @@
 "use client";
-// Replay: go back to a past moment, see what the analyst said then, make your own call, then reveal what happened.
-// Until you reveal, the chart stops at that moment. Calls are scored the same way as the verified track record.
-import { useEffect, useState } from "react";
-import { post } from "@/lib/api";
-import { verdictTone } from "@/lib/analysis";
+// Replay: go back to a past moment, see what the analyst said then, make your own call, then reveal what happened,
+// or play the candles forward at 1x to 16x. Until you reveal or play, the chart stops at that moment. Calls are scored
+// the same way as the verified track record. Your analysis of the moment can be saved to My analysis.
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import Icon from "@/components/Icons";
+import { ApiError, get, post, qs } from "@/lib/api";
+import { aiToDrawings, verdictTone } from "@/lib/analysis";
 import PlanLadder from "@/components/terminal/PlanLadder";
+import { CHART_TYPES } from "@/components/chart/series";
 
 const AHEAD = 200;                       // candles of "what happened next" the chart shows after a reveal
 const NO_CALL = { side: "", entry: "", sl: "", tp: "" };
@@ -23,6 +27,8 @@ const WORDS = {
   unknown: "Not enough data yet",
 };
 const TONE_OF_VERDICT = { buy: "up", sell: "down", wait: "warn" };
+const SPEEDS = [1, 2, 3, 6, 8, 12, 16];
+const JUMPS = [["1 day ago", 1], ["1 week ago", 7], ["1 month ago", 30], ["3 months ago", 91]];
 
 // a Date as the value a datetime-local input takes (in local time)
 function localInput(d) {
@@ -66,7 +72,95 @@ function OutcomeCard({ title, o, dec }) {
   );
 }
 
-export default function ReplayPanel({ symbol, tf, replay, setReplay, onAnalysis }) {
+/** Play the candles after the replay moment forward, one at a time, at the chosen speed. */
+function Player({ eng, symbol, tf, at, onLimit, onStopHere, setError }) {
+  const [speed, setSpeed] = useState(2);
+  const [playing, setPlaying] = useState(false);
+  const [pos, setPos] = useState(0);
+  const [total, setTotal] = useState(0);
+  const data = useRef(null);
+  useEffect(() => {
+    data.current = null;
+    setPlaying(false);
+    setPos(0);
+    setTotal(0);
+    return () => { if (eng.current) eng.current.replayLock = false; };
+  }, [at, eng]);
+  const load = async () => {
+    if (data.current) return data.current;
+    try {
+      const d = await get(`/market/candles?${qs({ symbol, tf, bars: 600, at, ahead: AHEAD })}`);
+      const cut = Date.parse(at) / 1000;
+      const base = d.candles.filter((c) => c[0] + d.tf_seconds <= cut + 1).length;
+      data.current = { ...d, base };
+      setTotal(d.candles.length - base);
+      return data.current;
+    } catch (e) {
+      if (e instanceof ApiError && (e.status === 402 || e.status === 429) && onLimit) onLimit(e);
+      else setError(e.message || "Couldn't load the candles after this moment.");
+      return null;
+    }
+  };
+  const show = (d, k) => {
+    if (!eng.current) return;
+    eng.current.replayLock = true;
+    eng.current.setData(d.candles.slice(0, d.base + k), { tfSec: d.tf_seconds, decimals: d.decimals, keepView: true });
+  };
+  const stepBy = async (n) => {
+    const d = await load();
+    if (!d) return;
+    setPos((p) => {
+      const k = Math.max(0, Math.min(d.candles.length - d.base, p + n));
+      show(d, k);
+      return k;
+    });
+  };
+  useEffect(() => {
+    if (!playing) return undefined;
+    const t = setInterval(() => {
+      const d = data.current;
+      if (!d) return;
+      setPos((p) => {
+        if (p >= d.candles.length - d.base) {
+          setPlaying(false);
+          return p;
+        }
+        show(d, p + 1);
+        return p + 1;
+      });
+    }, Math.round(1000 / speed));
+    return () => clearInterval(t);
+  }, [playing, speed]); // eslint-disable-line react-hooks/exhaustive-deps
+  const toggle = async () => {
+    if (playing) { setPlaying(false); return; }
+    const d = await load();
+    if (d) setPlaying(true);
+  };
+  const stopHere = () => {
+    const d = data.current;
+    setPlaying(false);
+    if (!d || !pos) return;
+    const c = d.candles[d.base + pos - 1];
+    onStopHere(new Date((c[0] + d.tf_seconds) * 1000).toISOString());
+  };
+  return (
+    <div className="rp-player">
+      <div className="row" style={{ gap: 6 }}>
+        <button className="icon-btn" onClick={() => stepBy(-1)} disabled={!pos} aria-label="One candle back"><Icon name="chevronLeft" size={18} /></button>
+        <button className="btn primary sm rp-play" onClick={toggle}><Icon name={playing ? "pause" : "play"} size={15} /> {playing ? "Pause" : pos ? "Play" : "Play forward"}</button>
+        <button className="icon-btn" onClick={() => stepBy(1)} aria-label="One candle forward"><Icon name="chevronRight" size={18} /></button>
+        <span className="grow faint num" style={{ fontSize: "0.78rem", textAlign: "right" }}>{pos ? `+${pos}${total ? ` / ${total}` : ""} candles` : ""}</span>
+      </div>
+      <div className="rp-speeds" role="radiogroup" aria-label="Speed">
+        {SPEEDS.map((x) => <button key={x} role="radio" aria-checked={speed === x} className={speed === x ? "on" : ""} onClick={() => setSpeed(x)}>{x}×</button>)}
+      </div>
+      {pos ? <button className="btn sm" onClick={stopHere}><Icon name="target" size={14} /> Make this candle the replay moment</button> : null}
+    </div>
+  );
+}
+
+export default function ReplayPanel({ symbol, tf, replay, setReplay, onAnalysis, onLimit, chartType, onChartType, eng }) {
+  const router = useRouter();
   const at = replay ? replay.at : null;
   const [when, setWhen] = useState(() => localInput(new Date(Date.now() - 24 * 60 * 60 * 1000)));
   const [analysis, setAnalysis] = useState(null);
@@ -111,7 +205,30 @@ export default function ReplayPanel({ symbol, tf, replay, setReplay, onAnalysis 
       setAnalysis(d);
       if (onAnalysis) onAnalysis(d, { symbol, tf, at });
     } catch (e) {
-      setError(e.message || "The analysis failed.");
+      if (e instanceof ApiError && (e.status === 402 || e.status === 429) && onLimit) onLimit(e);
+      else setError(e.message || "The analysis failed.");
+    }
+    setBusy(false);
+  };
+
+  // this moment, the analyst's drawings and your own, and your call, as an analysis in My analysis
+  const saveMine = async () => {
+    setBusy(true);
+    try {
+      const mineDrawings = eng && eng.current ? eng.current.getDrawings() : [];
+      const drawings = (analysis ? aiToDrawings(analysis) : []).concat(mineDrawings);
+      const n = (x) => Number(x);
+      const myPlan = call.side && n(call.entry) > 0 && n(call.sl) > 0 && n(call.tp) > 0
+        ? { side: call.side, entry: n(call.entry), sl: n(call.sl), tps: [n(call.tp)] }
+        : plan ? { side: plan.side, entry: plan.entry, sl: plan.sl, tps: (plan.tps || []).slice(0, 3) } : null;
+      const d = await post("/my-analyses", {
+        symbol, tf, source: "replay", replay_at: at, drawings, plan: myPlan,
+        title: `${symbol} · ${tf} · replay ${at.slice(0, 16).replace("T", " ")}`,
+        ai: analysis ? { action: verdict.action, headline: verdict.headline, plan: plan ? { side: plan.side, entry: plan.entry, sl: plan.sl, tps: plan.tps } : null } : null,
+      });
+      router.push(`/desk?id=${d.id}`);
+    } catch (e) {
+      setError(e.message || "Couldn't save it.");
     }
     setBusy(false);
   };
@@ -151,17 +268,31 @@ export default function ReplayPanel({ symbol, tf, replay, setReplay, onAnalysis 
       </div>
 
       <div className="stack" style={{ gap: 6 }}>
-        <div className="label">Date and time (your local time)</div>
-        <input className="input" type="datetime-local" value={when} max={localInput(new Date())}
-          onChange={(e) => setWhen(e.target.value)} />
-        <div className="row" style={{ justifyContent: "flex-end" }}>
-          <button className="btn" onClick={show}>Show the chart then</button>
+        <div className="label">Go back to</div>
+        <div className="row wrap" style={{ gap: 6 }}>
+          {JUMPS.map(([l, days]) => (
+            <button key={l} className="chip" onClick={() => { setError(null); setReplay({ at: new Date(Date.now() - days * 86400000).toISOString(), ahead: 0 }); }}>{l}</button>
+          ))}
+          <button className="chip" onClick={() => { setError(null); setReplay({ at: new Date(Date.now() - (2 + Math.random() * 120) * 86400000).toISOString(), ahead: 0 }); }}>Surprise me</button>
         </div>
+        <div className="label" style={{ marginTop: 4 }}>Or a date and time (your local time)</div>
+        <div className="row" style={{ gap: 6 }}>
+          <input className="input" type="datetime-local" value={when} max={localInput(new Date())} onChange={(e) => setWhen(e.target.value)} />
+          <button className="btn" onClick={show}>Go</button>
+        </div>
+        {onChartType ? (
+          <button className="rp-type" onClick={onChartType}>
+            <span className="grow">Chart type: <b>{(CHART_TYPES.find((t) => t.id === chartType) || {}).label || "Candles"}</b></span>
+            <Icon name="chevronRight" size={15} />
+          </button>
+        ) : null}
       </div>
 
       {at ? (
         <div className="stack" style={{ gap: 10 }}>
-          <div className="hint">Chart stops at {utcText(at)}. Candles after it stay hidden until you reveal.</div>
+          <div className="hint">Chart stops at {utcText(at)}. Candles after it stay hidden until you reveal or play forward.</div>
+          {eng ? <Player eng={eng} symbol={symbol} tf={tf} at={at} onLimit={onLimit} setError={setError}
+            onStopHere={(iso) => setReplay({ at: iso, ahead: 0 })} /> : null}
 
           {!analysis ? (
             <div className="row" style={{ justifyContent: "flex-end" }}>
@@ -232,8 +363,11 @@ export default function ReplayPanel({ symbol, tf, replay, setReplay, onAnalysis 
 
       {error ? <div className="hint" style={{ color: "var(--warn)" }}>{error}</div> : null}
       {at ? (
-        <div className="row" style={{ justifyContent: "flex-end" }}>
-          <button className="btn ghost" onClick={() => setReplay(null)}>Back to live chart</button>
+        <div className="row wrap" style={{ justifyContent: "flex-end", gap: 8 }}>
+          <button className="btn sm" disabled={busy} onClick={saveMine} title="Save this moment with the analyst's drawings, yours and your call">
+            <Icon name="book" size={14} /> Save to My analysis
+          </button>
+          <button className="btn ghost sm" onClick={() => setReplay(null)}>Back to live chart</button>
         </div>
       ) : null}
     </div>

@@ -18,17 +18,20 @@ export const LAYERS = {
   candles: "Candle patterns",
   divergence: "RSI divergence",
   round: "Round numbers",
+  indicators: "Strategy indicators",
+  strategy: "Strategy trades",
   user: "Your levels",
 };
 
 export const ANALYSIS_STEPS = [
-  "Reading the higher timeframes",
+  "Reading every timeframe",
   "Mapping market structure",
-  "Marking liquidity pools",
-  "Finding order blocks and fair value gaps",
+  "Marking liquidity and how deep stop hunts reach",
+  "Running your strategies",
+  "Checking each strategy's record on this market",
   "Checking the news and calendar",
-  "Building the trade plan",
-  "Grading the setup",
+  "Placing stops past the liquidity",
+  "Grading the scenario",
 ];
 
 const UP = "#26a69a";
@@ -75,6 +78,7 @@ export function toOverlay(res, theme) {
       p1: d.y1, p2: d.y2 !== undefined && d.y2 !== null ? d.y2 : d.y1,
       points: Array.isArray(d.points) ? d.points.map(([x, y]) => ({ t: xt(x), p: y })) : null,
       bins: d.bins, axisTag: d.layer === "plan" && d.kind === "line",
+      why: d.why, title: d.title, copy: d.copy,
     };
     if (it.kind === "histogram" && !Array.isArray(it.bins)) continue;
     counts[it.layer] = (counts[it.layer] || 0) + 1;
@@ -112,4 +116,54 @@ export function verdictTone(v) {
 
 export function gradeClass(g) {
   return `g-${String(g || "").replace("+", "plus")}`;
+}
+
+const DASH = { dash: "dashed", dashdot: "dashed", dot: "dotted" };
+let SEQ = 0;
+const did = () => `ai${Date.now().toString(36)}${(SEQ++).toString(36)}`;
+
+/** The analyst's drawings as ordinary chart drawings the person can move, restyle or delete (My analysis). The trade
+ *  plan becomes one long/short position drawing with handles for the entry, stop and target. */
+export function aiToDrawings(res, theme = {}, hidden = null) {
+  const ov = toOverlay(res, theme);
+  const out = [];
+  const plan = res && res.plan;
+  // only what the chart showed: the chosen strategies' layers (or the main items without a choice), minus hidden layers
+  const scope = res && res.layers_scope ? new Set([...res.layers_scope, "user", "indicators"]) : null;
+  for (const it of ov.items) {
+    if (it.layer === "plan" || it.kind === "histogram" || it.plan === "alternative") continue;
+    if ((scope && !scope.has(it.layer)) || (!scope && (it.prio || 2) > 2) || (hidden && hidden.has(it.layer))) continue;
+    const style = { color: it.color || "#4ea4ff", width: Math.max(1, Math.round((it.width || 1) * 1.5)), dash: DASH[it.dash] || "solid", text: it.text || "", fromAi: true };
+    if ((it.kind === "line" || it.kind === "hline") && it.t1 !== null && it.p1 !== null) {
+      const flat = Math.abs((it.p2 ?? it.p1) - it.p1) < 1e-12;
+      if (flat && it.extend === "right") out.push({ id: did(), type: "hray", points: [{ t: it.t1, p: it.p1 }], style });
+      else if (it.t2 !== null && it.t2 !== undefined) out.push({ id: did(), type: "trendline", points: [{ t: it.t1, p: it.p1 }, { t: it.t2, p: it.p2 ?? it.p1 }], style });
+    } else if (it.kind === "box" && it.t1 !== null) {
+      out.push({ id: did(), type: "rect", points: [{ t: it.t1, p: it.p1 }, { t: it.t2 ?? it.t1, p: it.p2 }],
+        style: { ...style, fill: it.fill, extendRight: it.extend === "right", width: 1 } });
+    } else if (it.kind === "label" && it.text) {
+      out.push({ id: did(), type: "text", points: [{ t: it.t1, p: it.p1 }], style: { ...style, text: it.text } });
+    } else if (it.kind === "marker") {
+      out.push({ id: did(), type: it.symbol === "triangle-down" ? "arrowmark_down" : it.symbol === "triangle-up" ? "arrowmark_up" : "flag",
+        points: [{ t: it.t1, p: it.p1 }], style });
+    } else if (it.kind === "path" && it.points && it.points.length > 1) {
+      out.push({ id: did(), type: "brush", points: it.points.filter((p) => p.t !== null), style: { ...style, width: 1 } });
+    }
+  }
+  if (plan && plan.entry && plan.sl && plan.tps && plan.tps.length) {
+    const ct = res.candles.map((c) => c[0]);
+    const last = ct[ct.length - 1];
+    const step = (res.meta && res.meta.tf_seconds) || 3600;
+    out.push({ id: did(), type: plan.side === "short" ? "short" : "long",
+      points: [{ t: last + step, p: plan.entry }, { t: last + step * 25, p: plan.sl }, { t: last + step * 25, p: plan.tps[Math.min(1, plan.tps.length - 1)] }],
+      style: { color: "#e8a33d", width: 2, dash: "solid", fromAi: true } });
+  }
+  return out;
+}
+
+/** The plan inside a long/short drawing: { side, entry, sl, tps } (or null). */
+export function planFromDrawings(drawings) {
+  const d = [...(drawings || [])].reverse().find((x) => (x.type === "long" || x.type === "short") && x.points && x.points.length >= 3);
+  if (!d) return null;
+  return { side: d.type, entry: d.points[0].p, sl: d.points[1].p, tps: [d.points[2].p] };
 }

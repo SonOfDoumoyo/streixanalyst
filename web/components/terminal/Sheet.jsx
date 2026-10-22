@@ -1,6 +1,6 @@
 "use client";
-// A sheet that rises from the bottom of a phone screen (TradingView's mobile menus), and opens as a panel in the
-// middle of a larger screen. Close it with the ×, the backdrop, Escape, or by pulling the handle down.
+// A sheet that rises from the bottom of a phone screen, and slides in as a drawer from the right on a larger screen.
+// Close it with the ×, the backdrop, Escape, or by pulling the handle down.
 import { useEffect, useRef, useState } from "react";
 import Icon from "@/components/Icons";
 

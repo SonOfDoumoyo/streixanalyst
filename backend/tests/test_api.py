@@ -1337,6 +1337,10 @@ def t_strategies(c):
     r = c.post("/api/analysis/whatif", json=dict(symbol="BTCUSDT", tf="15m", price=price * 5), headers=H)
     check(r.status_code == 422 and "latest candle" in r.json()["detail"], r.text)
     # how every strategy has done on a market
+    ov = c.get("/api/strategies/overlay?symbol=BTCUSDT&tf=1h&id=supertrend").json()
+    check(ov["record"] and any(i["kind"] == "path" for i in ov["items"]) and all("t1" in i or "points" in i for i in ov["items"]),
+          {k: ov[k] for k in ov if k != "items"})
+    check(c.get("/api/strategies/overlay?symbol=BTCUSDT&tf=1h&id=nope").status_code == 422, "unknown strategy")
     f = c.get("/api/strategies/fit?symbol=EURUSD&tf=15m").json()
     check(f["rows"] and f["candles"] > 300 and "note" in f, {k: f[k] for k in f if k != "rows"})
     check(all("trades" in r_ or "error" in r_ for r_ in f["rows"]), f["rows"][:3])

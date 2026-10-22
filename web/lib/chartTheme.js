@@ -2,26 +2,31 @@
 // Settings is kept while it suits the current mode; when it does not (a white chart in dark mode, say), the palette
 // takes over, so light mode always gets a light chart and dark mode always gets a dark one.
 
-// TradingView-style palettes. Keys match what the chart engine reads from its theme.
+// Streix palettes. Keys match what the chart engine reads from its theme.
+const FONT = '-apple-system, BlinkMacSystemFont, "Trebuchet MS", Roboto, Ubuntu, sans-serif';
 export const CHART_PALETTES = {
   dark: {
     bg: "#000000",
-    grid: "rgba(42,46,57,0.85)",
-    text: "#9a9fac",
-    crosshair: "#758696",
-    axisLine: "#2a2e39",
-    label: "#2a3a5c",          // crosshair price and time tags
-    ma20: "#3fb8ff",           // solid, saturated indicator lines, as on TradingView
-    ma50: "#ffb020",
-    ma200: "#b78bff",
+    grid: "rgba(255,255,255,0.05)",
+    text: "#a19e97",
+    crosshair: "#8a877f",
+    axisLine: "#23262d",
+    label: "#3a3527",          // crosshair price and time tags: a dark brass
+    line: "#e8a33d",
+    font: FONT,
+    ma20: "#4dd8ff",           // solid, saturated indicator lines
+    ma50: "#f2bd66",
+    ma200: "#b28dff",
   },
   light: {
     bg: "#ffffff",
-    grid: "rgba(42,46,57,0.08)",
-    text: "#5d6676",
-    crosshair: "#9598a1",
-    axisLine: "#e0e3eb",
-    label: "#2a2e39",
+    grid: "rgba(20,24,33,0.07)",
+    text: "#5b5f69",
+    crosshair: "#9a9ca3",
+    axisLine: "#e2e4e9",
+    label: "#2b2f37",
+    line: "#c98417",
+    font: FONT,
     ma20: "#1e6fe0",
     ma50: "#e08a00",
     ma200: "#7a3fe0",

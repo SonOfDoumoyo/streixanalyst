@@ -5,6 +5,10 @@ const backend = (process.env.BACKEND_URL || "http://localhost:8000").replace(/\/
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // what the browser gets is minified code without source maps or debug logging: the page's structure can't be hidden
+  // from the browser's inspector (no website can do that), but the source isn't handed out readable either
+  productionBrowserSourceMaps: false,
+  compiler: { removeConsole: process.env.NODE_ENV === "production" ? { exclude: ["error"] } : false },
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${backend}/api/:path*` }];
   },

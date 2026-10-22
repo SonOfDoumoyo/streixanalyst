@@ -22,7 +22,6 @@ function TV() {
   const [meta, setMeta] = useState(null);
   const [res, setRes] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [detail, setDetail] = useState(1);
   const [rotate, setRotate] = useState(false);
   const [quotes, setQuotes] = useState({});
   const [paywall, setPaywall] = useState(null);
@@ -41,8 +40,7 @@ function TV() {
     const e = eng.current;
     e.setTheme(chartThemeFor(settings.theme, settings.chart, settings.candles));
     e.setOptions({ style: settings.candles.style, volume: true, indicators: settings.indicators });
-    e.setDetail(detail);
-  }, [ready, settings, detail]);
+  }, [ready, settings]);
 
   useEffect(() => {
     if (!ready || !eng.current) return undefined;
@@ -80,6 +78,7 @@ function TV() {
       const d = await post("/analysis/run", { symbol, tf, account: Number(a.account) || 1000, risk_pct: Number(a.risk_pct) || 1, mode: "beginner" });
       setRes(d);
       const ov = toOverlay(d, chartThemeFor(settings.theme, settings.chart, settings.candles));
+      eng.current.setScope(d.layers_scope || null);
       eng.current.setAnalysis(ov.items, { animate: true, pins: ov.pins });
       if (d.view) eng.current.fitTimes(d.candles[Math.max(0, d.view.x_from)][0], d.candles[d.candles.length - 1][0] + d.meta.tf_seconds * 30, 6);
     } catch (e) {
@@ -107,7 +106,6 @@ function TV() {
       if (e.key === "ArrowRight" || e.key === "ArrowDown") step(1);
       else if (e.key === "ArrowLeft" || e.key === "ArrowUp") step(-1);
       else if (e.key.toLowerCase() === "a" || e.key === "Enter") analyse();
-      else if (e.key.toLowerCase() === "d") setDetail((d) => (d % 3) + 1);
       else if (e.key.toLowerCase() === "f") document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen && document.documentElement.requestFullscreen().catch(() => {});
       else if (e.key.toLowerCase() === "r") setRotate((r) => !r);
       else return;
@@ -153,7 +151,7 @@ function TV() {
           <div className="card" style={{ textAlign: "center", padding: "2rem 1.4rem" }}>
             <Icon name="zap" size={44} style={{ margin: "0 auto 0.8rem", color: "var(--brand-2)" }} />
             <h2 style={{ margin: "0 0 0.4rem", fontFamily: "var(--font-display)" }}>Press A to analyse</h2>
-            <p className="muted" style={{ margin: "0 0 1.2rem" }}>Use the arrow keys to change market. D changes detail, R rotates, F goes full screen.</p>
+            <p className="muted" style={{ margin: "0 0 1.2rem" }}>Use the arrow keys to change market. R rotates, F goes full screen.</p>
             <button className="btn primary lg block" onClick={analyse} disabled={busy}><Icon name="zap" size={20} /> Analyse {meta ? meta.display : symbol}</button>
           </div>
         ) : (

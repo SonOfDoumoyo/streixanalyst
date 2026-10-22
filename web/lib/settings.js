@@ -26,9 +26,16 @@ export const DEFAULT_SETTINGS = {
     minCandle: 2,              // narrowest candle in px when pinching in (1-10, set in Settings)
   },
   indicators: { ema20: false, ema50: true, ema200: true, bb: false, vwap: false },
-  analysis: { detail: 1, animate: true, account: 1000, risk_pct: 1, leverage: "", mode: "auto", showAlt: false, directionView: "range" },
+  analysis: { detail: 2, animate: true, account: 1000, risk_pct: 1, leverage: "", mode: "auto", showAlt: false, directionView: "range",
+    showLevels: true,          // off: analysis only, no entry / stop / target anywhere
+    fixedTime: false },        // the person also trades fixed time (shows the up/down card first)
+  studies: [],               // indicators from the library: [{ key, id, params }] (components/chart/studies.js)
+  intervalFavorites: ["5m", "15m", "1h", "4h"],
+  toolFavorites: ["trendline", "hline", "rect", "fib", "long"],
+  keepScreenOn: false,       // stop the phone dimming while the chart is open
+  rememberChart: true,       // reopen the last market and timeframe
   layers: {},
-  drawingDefaults: { color: "#2962ff", width: 2, dash: "solid" },
+  drawingDefaults: { color: "#4ea4ff", width: 2, dash: "solid" },
   chartFavorites: [],        // chart types starred with a long tap in the Chart type sheet
   chartTypeTipSeen: false,
   layouts: [],               // saved chart layouts (market, timeframe, chart type, indicators, panes, compared markets)
@@ -40,7 +47,7 @@ export const DEFAULT_SETTINGS = {
 };
 
 export const CANDLE_PRESETS = [
-  { name: "TradingView", up: "#12d9a0", down: "#ff3b5c" },
+  { name: "Vivid", up: "#12d9a0", down: "#ff3b5c" },
   { name: "Classic", up: "#26a69a", down: "#ef5350" },
   { name: "Streix", up: "#2fd3a6", down: "#ff5d7a" },
   { name: "Ocean", up: "#3b90fa", down: "#f5a524" },

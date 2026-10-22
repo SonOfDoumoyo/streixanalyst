@@ -420,3 +420,45 @@ def fit(symbol, tf, ids=None, bars=3000, ttl=1800):
         if len(_fit_cache) > 500:
             _fit_cache.clear()
     return out
+
+
+def strategy_overlay(symbol, tf, sid, bars=1500):
+    """One strategy's trades on this chart (entries, exits, result) and the indicator lines it uses, with epoch times,
+    so the chart can draw them like a strategy report."""
+    tf = _norm_tf(tf)
+    if sid not in st.BY_ID:
+        raise EngineError("Unknown strategy.")
+    C = _get(symbol, tf, bars, refresh_s=60, min_bars=150)
+    dfe, A = ga.se.analyze(C["df"])
+    ctx = st.Ctx(dfe, tf, A, C["asset_class"])
+    cost, slip = gm.cost_of(C["sub"])
+    s = st.BY_ID[sid]
+    trades = st.backtest(ctx, sid, cost, slip)
+    ts = md.epoch_s(dfe.index)
+    items = []
+    for m in st.markers(ctx, sid, trades[-150:]):
+        if m["kind"] == "marker":
+            items.append(dict(kind="marker", layer="strategy", t1=int(ts[m["i"]]), p1=m["price"], symbol=m["symbol"],
+                              color=m["color"], text=m["text"], why=m["why"], title=m["text"]))
+        else:
+            items.append(dict(kind="line", layer="strategy", t1=int(ts[m["i1"]]), t2=int(ts[m["i2"]]), p1=m["p1"],
+                              p2=m["p2"], color=m["color"], dash="dot", width=1.1, text=m["text"], labelAt="end",
+                              why=m["why"], title=m["text"]))
+    for key, (label, color, vals) in st.indicator_lines(ctx, [sid], 0).items():
+        pts, run = [], []
+        for t, v in zip(ts, vals):
+            if v is None or not (v == v):
+                if len(run) > 1:
+                    pts.append(run)
+                run = []
+            else:
+                run.append(dict(t=int(t), p=float(v)))
+        if len(run) > 1:
+            pts.append(run)
+        for seg in pts:
+            items.append(dict(kind="path", layer="strategy", points=seg, color=color, width=1.2, title=label,
+                              why=f"{label}: part of {s['name']}."))
+    rec = st.record(trades, s["fixed_time"])
+    live = st.live(ctx, sid, price=float(C["price"]))
+    return ga.jsonable(dict(id=sid, name=s["name"], symbol=C["symbol"], tf=tf, record=rec, items=items, live=live,
+                            how=s["how"]))

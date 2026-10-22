@@ -1,8 +1,5 @@
-import { IBM_Plex_Sans } from "next/font/google";
 import Providers from "@/components/Providers";
 import "./globals.css";
-
-const plex = IBM_Plex_Sans({ subsets: ["latin"], weight: ["400", "500", "600", "700"], variable: "--font-plex", display: "swap" });
 
 export const metadata = {
   metadataBase: new URL(process.env.SITE_URL || "https://streixanalyst.com"),
@@ -30,7 +27,7 @@ export const viewport = {
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en" data-theme="dark" className={plex.variable} suppressHydrationWarning>
+    <html lang="en" data-theme="dark" suppressHydrationWarning>
       <body>
         <Providers>{children}</Providers>
       </body>

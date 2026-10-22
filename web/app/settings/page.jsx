@@ -9,6 +9,7 @@ import { ExperiencePicker } from "@/components/AuthForms";
 import { useAuth } from "@/components/Providers";
 import { Field, RequireAuth } from "@/components/ui";
 import { AnalysisOptions } from "@/components/terminal/AnalysisPanel";
+import StrategyPicker from "@/components/StrategyPicker";
 import { DIRECTION_VIEWS } from "@/components/DirectionBar";
 import { get, patch, post } from "@/lib/api";
 import { currentPushState, disablePush, enablePush, pushSupported } from "@/lib/push";
@@ -117,6 +118,7 @@ function SettingsInner() {
   const skinBg = (settings.chart.skins && settings.chart.skins[modeKey] && settings.chart.skins[modeKey].bg) || null;
   const router = useRouter();
   const [sec, setSec] = useState("profile");
+  const [picker, setPicker] = useState(false);
   const [p, setP] = useState({ first_name: user.first_name, last_name: user.last_name, experience: user.experience, phone: user.phone || "" });
   const [pw, setPw] = useState({ current_password: "", new_password: "" });
   const [busy, setBusy] = useState(false);
@@ -186,6 +188,20 @@ function SettingsInner() {
                 <div className="field"><label>Trading experience</label><ExperiencePicker value={p.experience} onChange={(v) => setP({ ...p, experience: v })} /></div>
                 <div className="row" style={{ justifyContent: "flex-end" }}><button className="btn primary" disabled={busy}>Save profile</button></div>
               </form>
+            ) : null}
+            {sec === "chart" ? (
+              <div className="card stack">
+                <b>Chart behaviour</b>
+                <label className="row ap-toggle">
+                  <span className="grow"><b>Keep the screen on</b><small>Your phone won&apos;t dim or lock while the chart is open</small></span>
+                  <button className={`switch-ui${settings.keepScreenOn ? " on" : ""}`} aria-pressed={!!settings.keepScreenOn} onClick={() => updateSettings({ keepScreenOn: !settings.keepScreenOn })} />
+                </label>
+                <label className="row ap-toggle">
+                  <span className="grow"><b>Reopen my last chart</b><small>Start on the market and interval you used last</small></span>
+                  <button className={`switch-ui${settings.rememberChart !== false ? " on" : ""}`} aria-pressed={settings.rememberChart !== false} onClick={() => updateSettings({ rememberChart: settings.rememberChart === false })} />
+                </label>
+                <div className="hint">The crosshair appears only while you hold (phone) or hover (computer) on the chart; hold on the newest candle to analyse from that price.</div>
+              </div>
             ) : null}
             {sec === "chart" ? (
               <div className="card stack">
@@ -262,13 +278,17 @@ function SettingsInner() {
                 <div className="hint">Used to size every plan (risk per trade, position size, leverage and liquidation).</div>
                 <AnalysisOptions settings={settings} updateSettings={updateSettings} />
                 <div className="field">
-                  <label>How much the analyst draws</label>
-                  <div className="seg brand">
-                    {[[1, "Essentials"], [2, "Normal"], [3, "Everything"]].map(([n, l]) => (
-                      <button key={n} className={settings.analysis.detail === n ? "on" : ""} onClick={() => updateSettings({ analysis: { detail: n } })}>{l}</button>
-                    ))}
+                  <label>Strategies the analyst uses</label>
+                  <div className="row wrap" style={{ gap: 8 }}>
+                    <span className="muted" style={{ fontSize: "0.9rem" }}>{(user.strategies || []).length ? `${user.strategies.length} chosen. The chart shows only what they use.` : "Not chosen yet: the analyst uses its own mix."}</span>
+                    <button className="btn sm" onClick={() => setPicker(true)}><Icon name="target" size={14} /> Choose strategies</button>
                   </div>
                 </div>
+                <label className="row ap-toggle">
+                  <span className="grow"><b>Show entry, stop and targets</b><small>Off: the analyst gives analysis only, with no trade levels</small></span>
+                  <button className={`switch-ui${settings.analysis.showLevels !== false ? " on" : ""}`} aria-pressed={settings.analysis.showLevels !== false}
+                    onClick={() => updateSettings({ analysis: { showLevels: settings.analysis.showLevels === false } })} />
+                </label>
                 <div className="field">
                   <label>Bull / bear bar</label>
                   <div className="seg brand">
@@ -313,6 +333,7 @@ function SettingsInner() {
           </div>
         </div>
       </main>
+      <StrategyPicker open={picker} onClose={() => setPicker(false)} symbol={settings.lastSymbol || "BTCUSDT"} tf={settings.lastTf && ["1m", "5m", "15m", "30m", "1h", "4h", "1D", "1W"].includes(settings.lastTf) ? settings.lastTf : "1h"} />
     </div>
   );
 }

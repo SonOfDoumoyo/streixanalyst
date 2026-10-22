@@ -2,15 +2,22 @@
 // TradingView-style drawing tools and the animated AI analysis overlay. Framework-free; React wraps it.
 import { computeAll, heikinAshi } from "./indicators";
 import { DERIVED, derive, sessionProfiles, tpoLetter, niceBox, atr as atrOf } from "./series";
+import { EXTRA_TOOLS, drawExtra, hitExtra } from "./drawtools";
+import { runStudy } from "./studies";
 
 export const TOOLS = {
-  cursor: { pts: 0 }, crosshair: { pts: 0 },
+  cursor: { pts: 0 }, crosshair: { pts: 0 }, eraser: { pts: 0, label: "Eraser" },
   trendline: { pts: 2, label: "Trend line" }, ray: { pts: 2, label: "Ray" }, extline: { pts: 2, label: "Extended line" },
   arrow: { pts: 2, label: "Arrow" }, hline: { pts: 1, label: "Horizontal line" }, hray: { pts: 1, label: "Horizontal ray" },
   vline: { pts: 1, label: "Vertical line" }, rect: { pts: 2, label: "Rectangle / zone" }, channel: { pts: 3, label: "Parallel channel" },
   fib: { pts: 2, label: "Fib retracement" }, long: { pts: 1, label: "Long position" }, short: { pts: 1, label: "Short position" },
   measure: { pts: 2, label: "Measure" }, text: { pts: 1, label: "Text note" },
+  ...EXTRA_TOOLS,
 };
+// analysis layers that are always drawn, whichever strategies are chosen
+const ALWAYS_LAYERS = new Set(["plan", "price", "user", "strategy"]);
+// a touch is followed by emulated mouse events on most phones; those must never paint a crosshair
+const TOUCH_GHOST_MS = 900;
 const FIB = [0, 0.236, 0.382, 0.5, 0.618, 0.705, 0.786, 1, 1.272, 1.618];
 // New York clock hour (0–23) of a unix time, for the killzone windows.
 const NY_HOUR = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "2-digit", hourCycle: "h23" });
@@ -25,7 +32,7 @@ const FIB_COL = ["#9aa7bd","#ff4d5e", "#ffa726", "#3ddc84", "#12d9a0", "#2fb5d6"
 const DEFAULT_THEME = {
   bg: "#000000", grid: "rgba(42,46,57,0.85)", text: "#9a9fac", crosshair: "#758696",
   up: "#00e6a0", down: "#ff2d55", wickUp: "#00e6a0", wickDown: "#ff2d55", borderUp: "#00e6a0", borderDown: "#ff2d55",
-  line: "#2962ff", axisLine: "#2a2e39", font: "IBM Plex Sans, system-ui, -apple-system, Segoe UI, sans-serif",
+  line: "#e8a33d", axisLine: "#23262d", font: "-apple-system, BlinkMacSystemFont, \"Trebuchet MS\", Roboto, Ubuntu, sans-serif",
   label: "#2a3a5c", ma20: "#3fb8ff", ma50: "#ffb020", ma200: "#b78bff",
 };
 // grid is off by default (premium look); the user turns it on from the chart menu
@@ -111,7 +118,15 @@ export class ChartEngine {
     this.ana = null;
     this.anaStart = 0;
     this.detail = 2;
+    this.scope = null;             // the analysis layers the chosen strategies use (null: all)
     this.hiddenLayers = new Set();
+    this.studies = [];             // indicator instances [{ key, id, params }] (studies.js)
+    this.studyOut = [];            // their computed values, same order
+    this.sov = null;               // a strategy's trades drawn on the chart (strategy overlay)
+    this.keepDrawing = false;      // stay in the drawing tool after placing a drawing
+    this._lastTouch = -1e9;
+    this._hoverOK = typeof window === "undefined" || !window.matchMedia || window.matchMedia("(hover: hover) and (pointer: fine)").matches;
+    this._labelBoxes = [];
     this.showAlt = true;
     this.pins = [];
     this.hover = null;
@@ -203,7 +218,10 @@ export class ChartEngine {
     // chose. The view still goes to the latest candle, but the zoom is never changed for them.
     const width = keepWidth ? this.spacing : null;
     this.raw = rows.map(toRow);
-    if (!keepView) this.cross = null;          // a new chart starts without the crosshair
+    if (!keepView) {                           // a new chart starts without the crosshair
+      this.cross = null;
+      this.hover = null;
+    }
     if (tfSec) this.tfSec = tfSec;
     if (decimals !== undefined && decimals !== null) this.dec = decimals;
     if (label !== undefined) this.label = label;
@@ -259,6 +277,7 @@ export class ChartEngine {
     }
     this.ha = style === "heikin" ? heikinAshi(this.d) : null;
     this.ind = this.d.length ? computeAll(this.d, this.tfSec < 86400 && !DERIVED.has(style)) : null;
+    this._computeStudies();
     this._prof = null;
     let top = 1;
     for (const k of this.raw) if (k.h > top) top = k.h;
@@ -361,7 +380,11 @@ export class ChartEngine {
     this.axisW = Math.max(Math.round(58 * s), Math.ceil(ctx.measureText(sample).width) + Math.round(20 * s));
     this.timeH = Math.round(24 * s);
     const avail = this.H - this.timeH;
-    this.rsiH = this.opts.rsi ? Math.round(avail * 0.2) : 0;
+    // panes under the price chart: the RSI switch and every pane study; each gets ~18% (less when there are many)
+    const n = (this.opts.rsi ? 1 : 0) + this._panes().length;
+    const each = n ? Math.round(avail * Math.max(0.1, Math.min(0.2, 0.42 / n))) : 0;
+    this.paneH = each;
+    this.rsiH = each * n;
     this.mainH = avail - this.rsiH;
     this.plotW = this.W - this.axisW;
   }
@@ -529,6 +552,29 @@ export class ChartEngine {
     this.dirty();
   }
 
+  /** Show a span of time ending at the latest candle: seconds, "ytd" or "all". */
+  showRange(span) {
+    if (!this.d.length) return;
+    const last = this.d[this.d.length - 1].t;
+    let from;
+    if (span === "all") from = this.d[0].t;
+    else if (span === "ytd") from = Date.UTC(new Date(last * 1000).getUTCFullYear(), 0, 1) / 1000;
+    else from = last - Number(span);
+    this.fitTimes(Math.max(from, this.d[0].t), last + this.tfSec * 3, 0.5);
+    this.emit("view", this.viewState());
+  }
+
+  /** Centre the chart on a time (a date picked by the person). */
+  goTo(t) {
+    if (!this.d.length || !this.plotW) return;
+    const i = this.timeToIndex(t);
+    this.right = i + this.plotW / this.spacing / 2;
+    this._clampRight();
+    this.auto = true;
+    this.dirty();
+    this.emit("view", this.viewState());
+  }
+
   /** Bring the time span [tFrom, tTo] on screen by panning. The candle width the person chose stays as it is, and a
    *  span that is already visible leaves the view alone. */
   panTo(tFrom, tTo) {
@@ -580,6 +626,69 @@ export class ChartEngine {
   setShowAlt(b) {
     this.showAlt = b;
     this.dirty();
+  }
+
+  /** The analysis layers to draw (the ones the chosen strategies use); null draws every layer. */
+  setScope(layers) {
+    this.scope = layers && layers.length ? new Set(layers) : null;
+    this.dirty();
+  }
+
+  /** Is this analysis item drawn right now? (layer switches, the strategies' scope, the alternative plan) */
+  _anaOn(it) {
+    // with strategies chosen, the chart shows everything those strategies use (no detail levels); without, the main items
+    if ((!this.scope && it.prio > this.detail) || this.hiddenLayers.has(it.layer)) return false;
+    if (this.scope && !this.scope.has(it.layer) && !ALWAYS_LAYERS.has(it.layer) && it.layer !== "indicators") return false;
+    if (it.plan === "alternative" && !this.showAlt) return false;
+    return true;
+  }
+
+  /** A strategy's past trades and lines drawn on the chart (same item format as the analysis). */
+  setStrategyOverlay(items) {
+    this.sov = items && items.length ? items : null;
+    this.dirty();
+  }
+
+  // ───────────── indicators (studies.js) ─────────────
+  setStudies(list) {
+    this.studies = (list || []).filter((s) => s && s.id).map((s) => ({ ...s, params: { ...(s.params || {}) } }));
+    this._computeStudies();
+    this.layout();
+    this.dirty();
+  }
+
+  _computeStudies() {
+    this.studyOut = this.d.length ? this.studies.map((s) => (s.hidden ? null : runStudy(s, this.d))) : [];
+  }
+
+  _panes() {
+    const out = [];
+    this.studies.forEach((s, k) => {
+      const r = this.studyOut[k];
+      if (r && r.kind === "pane") out.push({ inst: s, out: r });
+    });
+    return out;
+  }
+
+  /** Values of every study at candle i, for the legend. */
+  studyValues(i) {
+    const out = [];
+    this.studies.forEach((s, k) => {
+      const r = this.studyOut[k];
+      if (!r) return;
+      const vals = [];
+      if (r.hist && r.hist.v[i] !== null && r.hist.v[i] !== undefined) vals.push({ v: r.hist.v[i], color: r.hist.up });
+      for (const l of r.lines || []) if (l.v[i] !== null && l.v[i] !== undefined) vals.push({ v: l.v[i], color: l.color, label: l.label });
+      out.push({ key: s.key, id: s.id, name: r.name, kind: r.kind, vals });
+    });
+    return out;
+  }
+
+  lockAll(on) {
+    if (!this.drawings.length) return;
+    this._snapshot();
+    for (const d of this.drawings) d.locked = !!on;
+    this._changed();
   }
 
   _anaDuration() {
@@ -769,7 +878,7 @@ export class ChartEngine {
       const k = this.d[clamp(Math.round(i), 0, this.d.length - 1)];
       if (k && Math.round(i) <= this.d.length - 1 && Math.round(i) >= 0) {
         let best = null;
-        let bd = 16 * this.scale;
+        let bd = this.magnet === "strong" ? Infinity : 16 * this.scale;
         for (const v of [k.o, k.h, k.l, k.c]) {
           const dd = Math.abs(this.y(v) - y);
           if (dd < bd) {
@@ -790,6 +899,7 @@ export class ChartEngine {
     const { x, y } = this._pos(e);
     this.pointers.set(e.pointerId, { x, y });
     const touch = e.pointerType === "touch";
+    if (e.pointerType !== "mouse") this._lastTouch = performance.now();
     clearTimeout(this._pressT);
     if (this.pointers.size === 2) {
       const [a, b] = [...this.pointers.values()];
@@ -802,6 +912,23 @@ export class ChartEngine {
     }
     if (this.pointers.size > 2) return;
     const area = this._area(x, y);
+    // the eraser removes the drawing under the finger
+    if (this.tool === "eraser" && area === "plot") {
+      const hit = this._hit(x, y);
+      if (hit) this.deleteDrawing(hit.id);
+      return;
+    }
+    // freehand: the brush and the highlighter record the finger's path
+    const spec0 = TOOLS[this.tool];
+    if (spec0 && spec0.freehand && area === "plot") {
+      this._snapshot();
+      const def = this.drawingDefaults || { color: "#2962ff", width: 2, dash: "solid" };
+      const d = { id: newId(), type: this.tool, points: [this._pt(x, y, false)], style: { ...def, ...(this.toolStyle || {}) } };
+      this.drawings.push(d);
+      this.drag = { mode: "brush", id: d.id, last: { x, y } };
+      this.dirty();
+      return;
+    }
     // placing a drawing
     if (this.tool !== "cursor" && this.tool !== "crosshair" && area === "plot") {
       this._place(x, y, touch);
@@ -877,17 +1004,20 @@ export class ChartEngine {
           d = { type: tool, points: [{ t: pt.t, p: pt.p }, { t: t2, p: pt.p - dir * risk }, { t: t2, p: pt.p + dir * 2 * risk }],
             style: { ...def } };
         } else {
-          d = { type: tool, points: [pt], style: { ...def, ...(tool === "text" ? { text: "" } : {}) } };
+          const wantsText = tool === "text" || (spec && spec.text);
+          d = { type: tool, points: [pt], style: { ...def, ...(wantsText ? { text: "" } : {}), ...(this.toolStyle || {}) } };
         }
         const id = this.addDrawing(d);
         this.select(id);
-        if (tool === "text") this.emit("requestText", id);
-        this.emit("toolDone", tool);
-        this.tool = "cursor";
+        if (tool === "text" || (spec && spec.text)) this.emit("requestText", id);
+        if (!this.keepDrawing) {
+          this.emit("toolDone", tool);
+          this.tool = "cursor";
+        }
         return;
       }
       this._snapshot();
-      const d = { id: newId(), type: tool, points: Array.from({ length: Math.min(2, spec.pts) }, () => ({ ...pt })), style: { ...def } };
+      const d = { id: newId(), type: tool, points: Array.from({ length: Math.min(2, spec.pts) }, () => ({ ...pt })), style: { ...def, ...(this.toolStyle || {}) } };
       if (tool === "rect") d.style.fill = d.style.fill || hexA(def.color, 0.14);
       this.drawings.push(d);
       this.placing = { id: d.id, step: 1, x0: x, y0: y, touch, downAt: performance.now() };
@@ -914,10 +1044,13 @@ export class ChartEngine {
       return;
     }
     this.placing = null;
-    this.tool = "cursor";
-    this.emit("toolDone", d.type);
+    if (!this.keepDrawing) {
+      this.tool = "cursor";
+      this.emit("toolDone", d.type);
+    }
     this._changed();
     this.select(d.id);
+    if (TOOLS[d.type] && TOOLS[d.type].text) this.emit("requestText", d.id);
   }
 
   onMove(e) {
@@ -944,6 +1077,15 @@ export class ChartEngine {
           d.points[2] = pt;
         } else d.points[d.points.length - 1] = pt;
         this.hover = { x, y };
+        this.dirty();
+      }
+      return;
+    }
+    if (dr && dr.mode === "brush") {
+      const d = this.drawings.find((q) => q.id === dr.id);
+      if (d && Math.hypot(x - dr.last.x, y - dr.last.y) > 3) {
+        d.points.push(this._pt(x, y, false));
+        dr.last = { x, y };
         this.dirty();
       }
       return;
@@ -1036,7 +1178,9 @@ export class ChartEngine {
         return;
       }
     }
-    // hover
+    // hover: only a real mouse moves the crosshair. On a phone the crosshair comes from holding a finger on the chart,
+    // so the mouse events a phone imitates after a tap (on page load, after picking a market) must not draw one.
+    if (e.pointerType !== "mouse" || !this._hoverOK || performance.now() - this._lastTouch < TOUCH_GHOST_MS) return;
     const area = this._area(x, y);
     this.hover = { x, y, area };
     if (area === "paxis") this.canvas.style.cursor = "ns-resize";
@@ -1068,6 +1212,19 @@ export class ChartEngine {
     }
     this.drag = null;
     if (!dr) return;
+    if (dr.mode === "brush") {
+      const d = this.drawings.find((q) => q.id === dr.id);
+      if (d && d.points.length < 2) this.drawings = this.drawings.filter((q) => q.id !== dr.id);
+      else if (d) {
+        this._changed();
+        this.select(d.id);
+      }
+      if (!this.keepDrawing) {
+        this.tool = "cursor";
+        this.emit("toolDone", d ? d.type : null);
+      }
+      return;
+    }
     const cancelled = e.type === "pointercancel";
     const quickTap = !cancelled && performance.now() - (dr.t0 || 0) < 450;
     if (dr.mode === "yscale" && !dr.scaled) {
@@ -1095,6 +1252,21 @@ export class ChartEngine {
     }
     if (dr.mode === "pan") {
       this.canvas.style.cursor = "crosshair";
+      if (!dr.moved && !cancelled) {
+        // a tap on the analyst's drawing: copy a plan price (its label), or say why the drawing is there
+        const box = this._labelBoxes.find((b) => x >= b.x - 4 && x <= b.x + b.w + 4 && y >= b.y - 4 && y <= b.y + b.h + 4);
+        if (box && box.it.copy) {
+          this.emit("copyLevel", { text: box.it.copy, title: box.it.title || box.it.text, item: box.it });
+          this.dirty();
+          return;
+        }
+        const it = this._hitAnalysis(x, y);
+        if (it && (it.why || it.copy)) {
+          this.emit("explain", { item: it, x: e.clientX, y: e.clientY });
+          this.dirty();
+          return;
+        }
+      }
       if (!dr.moved) {
         if (this.sel) this.select(null);
         if (dr.touch) {
@@ -1304,10 +1476,20 @@ export class ChartEngine {
     const k = this.d[i];
     const prev = this.d[i - 1];
     const ind = this.ind;
+    let cx = null;
+    let cy = null;
+    try {
+      const r = this.canvas.getBoundingClientRect();
+      cx = r.left + h.x;
+      cy = r.top + h.y;
+    } catch { /* not in a page */ }
     this.emit("hover", {
       i, candle: k, change: prev ? (k.c / prev.c - 1) * 100 : null, price: this.price(h.y),
       ema20: ind && ind.ema20[i], ema50: ind && ind.ema50[i], ema200: ind && ind.ema200[i], rsi: ind && ind.rsi[i],
       vwap: ind && ind.vwap ? ind.vwap[i] : null,
+      // the touch crosshair on the newest candle: the page offers "analyse from this price"
+      touch: !!this.cross, latest: i >= this.d.length - 1, time: k.t, cx, cy, inPlot: h.y <= this.mainH,
+      studies: this.studies.length ? this.studyValues(i) : null,
     });
   }
 
@@ -1340,6 +1522,56 @@ export class ChartEngine {
     return null;
   }
 
+  /** The analyst's drawing under (x, y): markers and labels first, then lines and paths, then boxes. */
+  _hitAnalysis(x, y) {
+    const lists = [];
+    if (this.sov) lists.push([this.sov, false]);
+    if (this.ana && !this.anaHidden) lists.push([this.ana, true]);
+    const tol = 8 * this.scale;
+    let best = null;
+    let bestRank = 9;
+    for (const [list, own] of lists) {
+      for (let k = list.length - 1; k >= 0; k--) {
+        const it = list[k];
+        if (own && !this._anaOn(it)) continue;
+        if (!it.why && !it.copy) continue;
+        let rank = 9;
+        if (it.kind === "marker" || it.kind === "label") {
+          const xx = this.tx(it.t1);
+          const yy = this.y(it.p1) + (it.kind === "label" ? (it.anchor === "above" ? -10 : 10) * this.scale : 0);
+          if (Math.hypot(x - xx, y - yy) <= tol + 6 * this.scale) rank = 0;
+        } else if (it.kind === "line" || it.kind === "hline") {
+          const x1 = it.kind === "hline" && it.extend === "right" && it.layer !== "plan" ? 0 : this.tx(it.t1);
+          const x2 = it.extend === "right" ? this.plotW : this.tx(it.t2);
+          if (distToSeg(x, y, x1, this.y(it.p1), x2, this.y(it.p2)) <= tol) rank = it.layer === "plan" ? 0 : 1;
+        } else if (it.kind === "path" && it.points) {
+          for (let j = 0; j + 1 < it.points.length; j++) {
+            const a = it.points[j];
+            const b = it.points[j + 1];
+            if (distToSeg(x, y, this.tx(a.t), this.y(a.p), this.tx(b.t), this.y(b.p)) <= tol) {
+              rank = 2;
+              break;
+            }
+          }
+        } else if (it.kind === "box") {
+          const x1 = this.tx(it.t1);
+          const x2 = it.extend === "right" ? this.plotW : this.tx(it.t2);
+          const ya = this.y(it.p1);
+          const yb = this.y(it.p2);
+          if (x >= Math.min(x1, x2) && x <= Math.max(x1, x2) && y >= Math.min(ya, yb) && y <= Math.max(ya, yb)) {
+            rank = it.layer === "plan" ? 5 : 3;
+          }
+        }
+        if (rank < bestRank) {
+          best = it;
+          bestRank = rank;
+          if (rank === 0) return best;
+        }
+      }
+    }
+    return best;
+  }
+
   _lineEnds(d) {
     const [a, b] = d.points;
     let x1 = this.tx(a.t);
@@ -1366,6 +1598,7 @@ export class ChartEngine {
 
   _hitOne(d, x, y, tol) {
     const t = d.type;
+    if (EXTRA_TOOLS[t]) return hitExtra(this, d, x, y, tol);
     if (t === "hline") return Math.abs(this.y(d.points[0].p) - y) <= tol;
     if (t === "hray") return Math.abs(this.y(d.points[0].p) - y) <= tol && x >= this.tx(d.points[0].t) - tol;
     if (t === "vline") return Math.abs(this.tx(d.points[0].t) - x) <= tol;
@@ -1461,18 +1694,22 @@ export class ChartEngine {
     ctx.rect(0, 0, this.plotW, this.mainH);
     ctx.clip();
     if (this.opts.killzones && this.tfSec <= 4 * 3600) this._drawKillzones(i0, i1);
+    this._labelBoxes = [];
     if (this.ana && !this.anaHidden) this._drawAnalysis("below");
+    if (this.sov) this._drawAnalysis("below", this.sov);
     if (this.opts.volume) this._drawVolume(i0, i1);
     this._drawSeries(i0, i1);
     this._drawIndicators(i0, i1);
+    this._drawStudies(i0, i1);
     this._drawCompare(i0, i1);
     if (this.ana && !this.anaHidden) this._drawAnalysis("above");
+    if (this.sov) this._drawAnalysis("above", this.sov);
     if (this.drawingsVisible) this._drawUserDrawings();
     this._drawLastLine();
     this._drawLastDot();
     this._drawCrosshair();
     ctx.restore();
-    if (this.opts.rsi) this._drawRsi(i0, i1);
+    this._drawPanes(i0, i1);
     this._drawPriceAxis(priceTicks);
     this._drawTimeAxis(timeTicks);
   }
@@ -2075,10 +2312,8 @@ export class ChartEngine {
     ctx.setLineDash([]);
   }
 
-  _drawRsi(i0, i1) {
+  _drawRsiAt(i0, i1, top, h) {
     const ctx = this.ctx;
-    const top = this.mainH;
-    const h = this.rsiH;
     const yv = (v) => top + 6 + ((100 - v) / 100) * (h - 12);
     ctx.save();
     ctx.beginPath();
@@ -2167,7 +2402,7 @@ export class ChartEngine {
     const ctx = this.ctx;
     const th = this.theme;
     ctx.fillStyle = th.bg;
-    ctx.fillRect(this.plotW, 0, this.axisW, this.mainH + this.rsiH);
+    ctx.fillRect(this.plotW, 0, this.axisW, this.mainH);
     ctx.strokeStyle = th.axisLine;
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -2197,8 +2432,7 @@ export class ChartEngine {
     }
     if (this.ana && !this.anaHidden) {
       for (const it of this.ana) {
-        if (!it.axisTag || it.prio > this.detail || this.hiddenLayers.has(it.layer)) continue;
-        if (it.plan === "alternative" && !this.showAlt) continue;
+        if (!it.axisTag || !this._anaOn(it)) continue;
         if (this._prog(it) < 0.6) continue;
         const isTp = /TP\d/.test(it.text || "");
         tags.push({ y: this.y(it.p1), text: this.fmt(it.p1), bg: it.color === th.text || it.color === "#d1d4dc" ? "#3a4a6b" : it.color,
@@ -2285,15 +2519,15 @@ export class ChartEngine {
   }
 
   // ───────────── analysis overlay ─────────────
-  _drawAnalysis(pass) {
+  _drawAnalysis(pass, list = null) {
     const ctx = this.ctx;
     const labels = [];
-    for (const it of this.ana) {
-      if (it.prio > this.detail || this.hiddenLayers.has(it.layer)) continue;
-      if (it.plan === "alternative" && !this.showAlt) continue;
+    const own = !list;
+    for (const it of list || this.ana) {
+      if (own && !this._anaOn(it)) continue;
       const below = it.kind === "box" || it.kind === "histogram";
       if ((pass === "below") !== below) continue;
-      const pr = this._prog(it);
+      const pr = own ? this._prog(it) : 1;
       if (pr <= 0) continue;
       ctx.globalAlpha = pr;
       const k = it.kind;
@@ -2352,6 +2586,8 @@ export class ChartEngine {
             ctx.textAlign = "left";
             ctx.textBaseline = "bottom";
             ctx.fillText(it.text, x1 + 4, y1 - 2);
+            const tw = ctx.measureText(it.text).width;
+            this._labelBoxes.push({ x: x1, y: y1 - this.fs - 6 * this.scale, w: tw + 10 * this.scale, h: this.fs + 10 * this.scale, it });
           } else if (at === "middle" || at === "start" || at === "end") {
             const xa = at === "middle" ? (x1 + x2) / 2 : at === "start" ? x1 : x2;
             const ya = at === "end" ? y2 : y1;
@@ -2429,6 +2665,208 @@ export class ChartEngine {
     if (pass === "above" && labels.length) this._rightLabels(labels);
   }
 
+  // ───────────── studies: overlays on the price chart, and panes under it ─────────────
+  _studyLine(vals, i0, i1, yOf, color, width = 1.3, dash = null, style = "line") {
+    const ctx = this.ctx;
+    if (style === "dots") {
+      ctx.fillStyle = color;
+      for (let i = i0; i <= i1; i++) {
+        const v = vals[i];
+        if (v === null || v === undefined) continue;
+        ctx.beginPath();
+        ctx.arc(this.x(i), yOf(v), 1.6 * this.scale, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      return;
+    }
+    ctx.beginPath();
+    let pen = false;
+    let lastY = null;
+    for (let i = i0; i <= i1; i++) {
+      const v = vals[i];
+      if (v === null || v === undefined || !Number.isFinite(v)) {
+        if (style !== "connect") pen = false;
+        continue;
+      }
+      const xx = this.x(i);
+      const yy = yOf(v);
+      if (!pen) {
+        ctx.moveTo(xx, yy);
+        pen = true;
+      } else if (style === "step" && lastY !== null) {
+        ctx.lineTo(xx, lastY);
+        ctx.lineTo(xx, yy);
+      } else ctx.lineTo(xx, yy);
+      lastY = yy;
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width * this.scale;
+    ctx.setLineDash(dash || []);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  _studyBand(b, i0, i1, yOf) {
+    const ctx = this.ctx;
+    let start = null;
+    const flush = (end) => {
+      if (start === null || end - start < 1) return;
+      ctx.beginPath();
+      for (let i = start; i <= end; i++) ctx.lineTo(this.x(i), yOf(b.up[i]));
+      for (let i = end; i >= start; i--) ctx.lineTo(this.x(i), yOf(b.lo[i]));
+      ctx.closePath();
+      const upIsUp = b.fill2 ? b.up[end] >= b.lo[end] : true;
+      ctx.fillStyle = upIsUp ? b.fill : b.fill2;
+      ctx.fill();
+    };
+    for (let i = i0; i <= i1; i++) {
+      const ok = b.up[i] !== null && b.lo[i] !== null && b.up[i] !== undefined && b.lo[i] !== undefined;
+      if (ok && start === null) start = i;
+      if (!ok && start !== null) {
+        flush(i - 1);
+        start = null;
+      }
+      if (ok && b.fill2 && start !== null && i > start && (b.up[i] >= b.lo[i]) !== (b.up[i - 1] >= b.lo[i - 1])) {
+        flush(i - 1);
+        start = i - 1;
+      }
+    }
+    if (start !== null) flush(i1);
+  }
+
+  _studyMarkers(markers, i0, i1, yOf) {
+    const ctx = this.ctx;
+    const s = 4 * this.scale;
+    ctx.font = this.font;
+    for (const m of markers) {
+      if (m.i < i0 || m.i > i1) continue;
+      const xx = this.x(m.i);
+      const off = (m.above ? -1 : 1) * 9 * this.scale;
+      const yy = yOf(m.p) + off;
+      ctx.fillStyle = m.color;
+      ctx.beginPath();
+      if (m.symbol === "triangle-up") {
+        ctx.moveTo(xx, yy - s);
+        ctx.lineTo(xx + s, yy + s);
+        ctx.lineTo(xx - s, yy + s);
+      } else if (m.symbol === "triangle-down") {
+        ctx.moveTo(xx, yy + s);
+        ctx.lineTo(xx + s, yy - s);
+        ctx.lineTo(xx - s, yy - s);
+      } else ctx.arc(xx, yy, s * 0.8, 0, Math.PI * 2);
+      ctx.fill();
+      if (m.text && this.spacing > 5) {
+        ctx.textAlign = "center";
+        ctx.textBaseline = m.above ? "bottom" : "top";
+        ctx.fillText(m.text, xx, yy + (m.above ? -s - 2 : s + 2));
+      }
+    }
+  }
+
+  _drawStudies(i0, i1) {
+    const yOf = (v) => this.y(v);
+    this.studies.forEach((s, k) => {
+      const r = this.studyOut[k];
+      if (!r || r.kind !== "overlay") return;
+      for (const b of r.bands || []) this._studyBand(b, i0, i1, yOf);
+      for (const l of r.lines || []) this._studyLine(l.v, i0, i1, yOf, l.color, l.width || 1.3, l.dash, l.style);
+      if (r.markers) this._studyMarkers(r.markers, i0, i1, yOf);
+    });
+  }
+
+  _drawPanes(i0, i1) {
+    let top = this.mainH;
+    if (this.opts.rsi) {
+      this._drawRsiAt(i0, i1, top, this.paneH);
+      top += this.paneH;
+    }
+    for (const { out } of this._panes()) {
+      this._drawPane(out, i0, i1, top, this.paneH);
+      top += this.paneH;
+    }
+  }
+
+  _drawPane(r, i0, i1, top, h) {
+    const ctx = this.ctx;
+    let lo = Infinity;
+    let hi = -Infinity;
+    if (r.range) [lo, hi] = r.range;
+    else {
+      const look = (v) => {
+        for (let i = i0; i <= i1; i++) {
+          const x = v[i];
+          if (x === null || x === undefined || !Number.isFinite(x)) continue;
+          if (x < lo) lo = x;
+          if (x > hi) hi = x;
+        }
+      };
+      for (const l of r.lines || []) look(l.v);
+      if (r.hist) look(r.hist.v);
+      for (const lv of r.levels || []) {
+        lo = Math.min(lo, lv);
+        hi = Math.max(hi, lv);
+      }
+      if (r.hist) {
+        lo = Math.min(lo, 0);
+        hi = Math.max(hi, 0);
+      }
+    }
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return;
+    if (hi - lo < 1e-12) {
+      hi += 1;
+      lo -= 1;
+    }
+    const pad = 6 * this.scale;
+    const yv = (v) => top + pad + ((hi - v) / (hi - lo)) * (h - 2 * pad);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, top, this.plotW, h);
+    ctx.clip();
+    ctx.strokeStyle = this.theme.grid;
+    ctx.setLineDash([3, 3]);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const v of r.levels || []) {
+      ctx.moveTo(0, Math.round(yv(v)) + 0.5);
+      ctx.lineTo(this.plotW, Math.round(yv(v)) + 0.5);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
+    if (r.hist) {
+      const base = yv(r.hist.above !== undefined ? r.hist.above : 0);
+      const w = Math.max(1, this.spacing * 0.6);
+      for (let i = i0; i <= i1; i++) {
+        const v = r.hist.v[i];
+        if (v === null || v === undefined || !Number.isFinite(v)) continue;
+        const prev = i ? r.hist.v[i - 1] : null;
+        const pos = r.hist.rising ? prev === null || v >= prev : v >= (r.hist.above !== undefined ? r.hist.above : 0);
+        ctx.fillStyle = hexA(pos ? r.hist.up : r.hist.down, 0.8);
+        const yy = yv(v);
+        ctx.fillRect(this.x(i) - w / 2, Math.min(yy, base), w, Math.max(1, Math.abs(yy - base)));
+      }
+    }
+    for (const l of r.lines || []) this._studyLine(l.v, i0, i1, yv, l.color, l.width || 1.3, l.dash, l.style);
+    if (r.markers) this._studyMarkers(r.markers, i0, i1, yv);
+    ctx.restore();
+    ctx.strokeStyle = this.theme.axisLine;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, top + 0.5);
+    ctx.lineTo(this.W, top + 0.5);
+    ctx.stroke();
+    ctx.fillStyle = this.theme.bg;
+    ctx.fillRect(this.plotW + 1, top + 1, this.axisW, h - 1);
+    ctx.font = this.font;
+    ctx.fillStyle = this.theme.text;
+    ctx.textBaseline = "middle";
+    ctx.textAlign = "left";
+    const f = (v) => (Math.abs(v) >= 1000 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(Math.min(4, this.dec)));
+    ctx.fillText(f(hi), this.plotW + 6 * this.scale, top + pad + 2);
+    ctx.fillText(f(lo), this.plotW + 6 * this.scale, top + h - pad - 2);
+    const last = (r.lines || []).map((l) => l.v[Math.min(i1, l.v.length - 1)]).filter((v) => v !== null && v !== undefined);
+    ctx.fillText(`${r.name}${last.length ? "  " + last.map(f).join("  ") : ""}`, 8, top + 11 * this.scale);
+  }
+
   _rightLabels(items) {
     const ctx = this.ctx;
     const gap = this.fs + 6 * this.scale;
@@ -2488,6 +2926,11 @@ export class ChartEngine {
     ctx.setLineDash(this._dash(st.dash));
     const t = d.type;
     const P = d.points;
+    if (EXTRA_TOOLS[t]) {
+      drawExtra(this, d);
+      ctx.setLineDash([]);
+      return;
+    }
     if (t === "hline" || t === "hray") {
       const yy = this.y(P[0].p);
       const x1 = t === "hline" ? 0 : this.tx(P[0].t);

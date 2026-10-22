@@ -1,12 +1,12 @@
 "use client";
-// The crosshair's + menu, like TradingView's: tap the + on the crosshair's price tag (or right-click the chart) for an
-// alert or a horizontal line at that price. On a phone it rises from the bottom; on a larger screen it opens beside
-// the pointer.
+// The crosshair's + menu: tap the + on the crosshair's price tag (or right-click the chart) for an alert, a line, or,
+// on the newest candle, "analyse from this price". On a phone it rises from the bottom; on a larger screen it opens
+// beside the pointer.
 import { useEffect } from "react";
 import Icon from "@/components/Icons";
 import Sheet from "./Sheet";
 
-export default function CrossMenu({ at, onClose, onLine, onRay, onAlert, onAlertForm, onCopy, symbolLabel, last }) {
+export default function CrossMenu({ at, onClose, onLine, onRay, onAlert, onAlertForm, onCopy, symbolLabel, last, latestTime, onWhatIf }) {
   useEffect(() => {
     if (!at) return undefined;
     const k = (e) => e.key === "Escape" && onClose();
@@ -16,7 +16,10 @@ export default function CrossMenu({ at, onClose, onLine, onRay, onAlert, onAlert
   if (!at) return null;
   const p = Number(at.price).toLocaleString("en-US", { minimumFractionDigits: at.decimals ?? 2, maximumFractionDigits: at.decimals ?? 2 });
   const op = last && at.price < last ? "below" : "above";
+  // "analyse from here" only on the newest candle: it is about entering now, not about the past
+  const onLatest = latestTime !== null && latestTime !== undefined && at.time >= latestTime;
   const items = [
+    ...(onLatest && onWhatIf ? [["zap", `Analyse from ${p}`, () => onWhatIf(at), "If I buy or sell from this price now"]] : []),
     ["bell", `Add alert on ${symbolLabel} at ${p}`, () => onAlert(at, op), op === "above" ? "When price rises to it" : "When price falls to it"],
     ["hline", `Draw horizontal line at ${p}`, () => onLine(at)],
     ["hray", `Draw horizontal ray at ${p}`, () => onRay(at)],

@@ -111,6 +111,7 @@ function PlanCard({ p, dec, title, isCrypto, dim, onAlert, onEdit }) {
   const j = Math.min(1, (p.tps || []).length - 1);
   return (
     <div className="card" style={{ padding: 14, opacity: dim ? 0.92 : 1 }}>
+      {p.strategy_name ? <div className="hint" style={{ marginBottom: 6 }}>Strategy: <b>{p.strategy_name}</b></div> : null}
       <div className="row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
         <div className="row" style={{ gap: 8 }}>
           <span className={`badge ${p.side === "long" ? "up" : "down"}`}>{p.side === "long" ? "BUY" : "SELL"} {String(p.type || "").toUpperCase()}</span>
@@ -208,8 +209,171 @@ function Report({ res, can, onUpgrade }) {
   );
 }
 
-export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk, onClean, onUpgrade, hiddenLayers, toggleLayer, layers, detail, setDetail, showAlt, setShowAlt, stale, symbolLabel, tf, symbol, onEditPlan }) {
-  const { settings, updateSettings, can, user } = useAuth();
+
+async function copyText(text, toast, what) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(`${what} copied`, "success", 1600);
+  } catch {
+    toast(text, "info", 6000);
+  }
+}
+
+/** Entry, stop and targets, each one tap to copy, plus "copy all" and "edit" (which moves the plan to My analysis). */
+export function LevelsCard({ p, dec, symbol, tf, onEdit, onAlert, toast, title }) {
+  if (!p) return null;
+  const rows = [["EP", "Entry", p.entry, "ep"], ["SL", "Stop loss", p.sl, "sl"], ...(p.tps || []).map((t, i) => [`TP${i + 1}`, `Take profit ${i + 1}`, t, "tp"])];
+  const all = `${symbol} ${tf} ${p.side === "long" ? "BUY" : "SELL"} ${String(p.type || "").toUpperCase()}\n`
+    + rows.map(([k, , v]) => `${k} ${fmtPrice(v, dec)}`).join("\n");
+  return (
+    <div className="levels-card" data-tour="levels">
+      <div className="lc-head">
+        <span className={`badge ${p.side === "long" ? "up" : "down"}`}>{p.side === "long" ? "BUY" : "SELL"} · {p.type}</span>
+        <b className="grow">{title}</b>
+        <span className={`grade ${gradeClass(p.grade)}`} style={{ width: 32, height: 32, fontSize: "0.9rem" }}>{p.grade}</span>
+      </div>
+      <div className="lc-rows">
+        {rows.map(([k, label, v, cls], i) => (
+          <button key={k} className={`lc-row ${cls}`} onClick={() => copyText(fmtPrice(v, dec).replace(/,/g, ""), toast, `${k} ${fmtPrice(v, dec)}`)} title={`Copy ${label}`}>
+            <span className="lc-k">{k}</span>
+            <span className="lc-v num">{fmtPrice(v, dec)}</span>
+            <span className="lc-d num faint">{cls === "tp" && p.rr ? `${Number(p.rr[i - 2] || 0).toFixed(1)}R` : cls === "sl" ? `${(Math.abs(p.entry - p.sl) / (p.entry || 1) * 100).toFixed(2)}%` : ""}</span>
+            <Icon name="copy" size={15} />
+          </button>
+        ))}
+      </div>
+      {p.liquidity_guard ? (
+        <div className="lc-note"><Icon name="shield" size={14} /> Stop placed past the liquidity at {fmtPrice(p.liquidity_guard.pool, dec)}, where stop hunts usually finish ({Number(p.liquidity_guard.depth_atr).toFixed(2)} ATR on this chart).</div>
+      ) : null}
+      {p.sweep_first ? <div className="lc-note warn"><Icon name="alert" size={14} /> {p.sweep_first.note}</div> : null}
+      <div className="lc-actions">
+        <button className="btn sm" onClick={() => copyText(all, toast, "The plan")}><Icon name="copy" size={14} /> Copy all</button>
+        {onEdit ? <button className="btn sm" onClick={() => onEdit(p)} title="Edit this analysis in My analysis, with all its drawings"><Icon name="pen" size={14} /> Edit</button> : null}
+        {onAlert ? <button className="btn sm" onClick={() => onAlert(p)}><Icon name="bell" size={14} /> Alert me</button> : null}
+      </div>
+    </div>
+  );
+}
+
+function Confidence({ c }) {
+  if (!c || c.level === "none") return null;
+  return <span className={`conf conf-${c.level}`} title={c.text}>{c.level === "good" ? "Good" : c.level === "moderate" ? "Moderate" : "Low"} confidence</span>;
+}
+
+function FixedTime({ ft }) {
+  if (!ft) return null;
+  const dir = ft.direction;
+  return (
+    <div className={`ft-card ${dir === "UP" ? "up" : dir === "DOWN" ? "down" : ""}`} data-tour="fixedtime">
+      <div className="row">
+        <span className="ft-dir">{dir ? (dir === "UP" ? "▲ UP" : "▼ DOWN") : "No call"}</span>
+        {dir ? <span className="grow faint">{ft.expiry} candles · {ft.expiry_minutes} min</span> : <span className="grow" />}
+        {dir ? <span className={`badge ${ft.edge > 0.01 ? "up" : "warn"}`}>{Math.round((ft.p_win || 0) * 100)}% vs {Math.round(ft.breakeven * 100)}% needed</span> : null}
+      </div>
+      <div className="hint" style={{ marginTop: 6 }}>{ft.text}</div>
+      {ft.skip_if && ft.skip_if.length ? <div className="lc-note warn" style={{ marginTop: 8 }}><Icon name="alert" size={14} /> Skip it: {ft.skip_if.join("; ")}.</div> : null}
+      <div className="ft-calls">
+        {(ft.calls || []).map((c) => (
+          <div key={c.id} className="row" style={{ fontSize: "0.8rem" }}>
+            <span className="grow">{c.name}</span>
+            {c.signal ? <b className={c.dir === 1 ? "up" : "down"}>{c.dir === 1 ? "UP" : "DOWN"}</b> : <span className="faint">waiting</span>}
+            <span className="faint num">{c.record && c.record.trades ? `${c.record.trades} calls · ${Math.round((c.record.win_rate || 0) * 100)}%` : ""}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Mtf({ mtf }) {
+  if (!mtf || !mtf.rows || !mtf.rows.length) return null;
+  return (
+    <div className="mtf" data-tour="mtf">
+      <div className="mtf-head"><b>Every timeframe</b><span className={`badge ${mtf.alignment > 0.15 ? "up" : mtf.alignment < -0.15 ? "down" : "warn"}`}>{mtf.word}</span></div>
+      <table>
+        <tbody>
+          {mtf.rows.map((r) => (
+            <tr key={r.tf} className={r.current ? "cur" : ""}>
+              <td className="num"><b>{r.tf}</b></td>
+              <td className={r.trend > 0 ? "up" : r.trend < 0 ? "down" : "faint"}>{r.trend > 0 ? "▲ up" : r.trend < 0 ? "▼ down" : "– unclear"}</td>
+              <td className="faint">{r.zone}</td>
+              <td className="faint">{r.last_event ? `${r.last_event.kind} ${r.last_event.direction === "bullish" ? "↑" : "↓"} ${r.last_event.bars_ago}c` : ""}</td>
+              <td>{(r.signals || []).map((x) => <span key={x.id} className={`sig ${x.dir > 0 ? "up" : "down"}`} title={x.name}>{x.dir > 0 ? "B" : "S"}</span>)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="hint">{mtf.text} B/S = one of your strategies signals a buy/sell on that timeframe.</div>
+    </div>
+  );
+}
+
+function Strategies({ sb, onChange }) {
+  if (!sb) return null;
+  if (sb.mode !== "chosen") {
+    return (
+      <button className="strat-strip" onClick={onChange}>
+        <Icon name="target" size={15} /> <span className="grow">The analyst's own mix. <b>Pick your strategies</b></span><Icon name="chevronRight" size={15} />
+      </button>
+    );
+  }
+  return (
+    <details className="fold" open>
+      <summary>Your strategies <span className="faint">{sb.items.length}</span></summary>
+      <div className="stack" style={{ gap: 8 }}>
+        {sb.items.map((x) => {
+          const r = x.record || {};
+          return (
+            <div key={x.id} className="strat-item">
+              <div className="row">
+                <b className="grow">{x.name}</b>
+                {x.signal ? <span className={`badge ${x.signal === "long" || x.signal === "up" ? "up" : "down"}`}>{x.signal === "long" ? "buy now" : x.signal === "short" ? "sell now" : x.signal.toUpperCase()}{x.age ? ` · ${x.age}c ago` : ""}</span>
+                  : x.missed ? <span className="badge warn">missed · ran {x.missed.age}c ago</span> : <span className="badge">waiting</span>}
+              </div>
+              <div className="hint">{x.signal ? "" : `Waiting for ${x.wait_for}.`}{!x.suits_tf ? " Usually used on other timeframes." : ""}{!x.suits_market ? " Not its usual market." : ""}</div>
+              {r.trades ? (
+                <div className="hint num">On this chart: {r.trades} trades · {Math.round((r.win_rate || 0) * 100)}% won · {r.breakeven ? `${Math.round(r.breakeven * 100)}% needed` : `${r.avg_r >= 0 ? "+" : ""}${Number(r.avg_r || 0).toFixed(2)}R avg`} · {r.verdict}</div>
+              ) : <div className="hint">{r.verdict || "No trades on the loaded candles."}</div>}
+            </div>
+          );
+        })}
+        <button className="btn sm" onClick={onChange}><Icon name="sliders" size={14} /> Change strategies</button>
+      </div>
+    </details>
+  );
+}
+
+function HowToEnter({ steps }) {
+  if (!steps || !steps.length) return null;
+  return (
+    <details className="fold" open data-tour="howto">
+      <summary>How to take this trade</summary>
+      <ol className="howto">
+        {steps.map((s, i) => <li key={i}>{s}</li>)}
+      </ol>
+    </details>
+  );
+}
+
+function Liquidity({ liq, dec }) {
+  if (!liq) return null;
+  return (
+    <details className="fold">
+      <summary>Liquidity <span className="faint">{liq.draw ? `drawn ${liq.draw}` : ""}</span></summary>
+      <div className="stack" style={{ gap: 8, fontSize: "0.85rem" }}>
+        <div className="muted">{liq.text}</div>
+        <div className="grid-2">
+          <div><div className="faint" style={{ fontSize: "0.76rem" }}>Buy-side (above)</div>{(liq.above || []).map((x) => <div key={x} className="num down">{fmtPrice(x, dec)}</div>)}</div>
+          <div><div className="faint" style={{ fontSize: "0.76rem" }}>Sell-side (below)</div>{(liq.below || []).map((x) => <div key={x} className="num up">{fmtPrice(x, dec)}</div>)}</div>
+        </div>
+      </div>
+    </details>
+  );
+}
+
+export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk, onClean, onUpgrade, hiddenLayers, toggleLayer, layers, showAlt, setShowAlt, stale, symbolLabel, tf, symbol, onEditPlan, onStrategies }) {
+  const { settings, updateSettings, can, user, toast } = useAuth();
+  const showLevels = settings.analysis.showLevels !== false;
   if (busy && !res) {
     return (
       <div className="stack">
@@ -227,19 +391,21 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
     );
   }
   if (!res) {
+    const mine = (user && user.strategies) || [];
     return (
       <div className="stack">
-        <div className="card" style={{ padding: 18, textAlign: "center" }}>
-          <div style={{ width: 54, height: 54, borderRadius: 16, margin: "0 auto 12px", display: "grid", placeItems: "center", background: "rgba(47,134,246,.14)", color: "var(--brand-2)" }}>
-            <Icon name="zap" size={26} />
-          </div>
-          <h3 style={{ margin: "0 0 6px", fontFamily: "var(--font-display)" }}>Ready when you are</h3>
-          <p className="muted" style={{ margin: "0 0 14px", fontSize: "0.9rem" }}>
-            Structure, liquidity, key levels, news and a trade plan with entry, stop and targets for {symbolLabel} on {TF_LABEL[tf] || tf}, drawn on your chart.
-          </p>
+        <div className="ready">
+          <span className="ready-ic"><Icon name="zap" size={24} /></span>
+          <h3>Read {symbolLabel} on {TF_LABEL[tf] || tf}</h3>
+          <p className="muted">The analyst marks structure and liquidity, checks every timeframe and the news, then gives a careful scenario{showLevels ? " with entry, stop and targets" : ""} for {mine.length ? `your ${mine.length} strateg${mine.length > 1 ? "ies" : "y"}` : "its own mix of setups"}.</p>
           <button className="btn primary block lg" onClick={onAnalyse}><Icon name="zap" size={18} /> Analyse {symbolLabel}</button>
-          <div className="hint" style={{ marginTop: 10 }}>Draw your own levels first if you want the analyst to check them.</div>
+          <button className="btn ghost block sm" onClick={onStrategies} style={{ marginTop: 8 }}><Icon name="target" size={14} /> {mine.length ? "Change strategies" : "Pick strategies first"}</button>
+          <div className="hint" style={{ marginTop: 6 }}>Draw your own levels first if you want the analyst to check them.</div>
         </div>
+        <label className="row ap-toggle">
+          <span className="grow"><b>Show entry, stop and targets</b><small>Off: analysis only, no trade levels</small></span>
+          <button className={`switch-ui${showLevels ? " on" : ""}`} aria-pressed={showLevels} onClick={() => updateSettings({ analysis: { showLevels: !showLevels } })} />
+        </label>
         <div className="section-title">Your settings</div>
         <AnalysisOptions settings={settings} updateSettings={updateSettings} />
       </div>
@@ -254,67 +420,83 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
     requestAlert({ symbol, tf, decimals: dec, plan: { side: p.side, entry: p.entry, sl: p.sl, tp: (p.tps || [])[j] } });
   };
   const model = res.model || {};
+  const conflict = v.conflict || (res.strategies && res.strategies.conflict);
   return (
     <div className="stack ap" style={{ gap: 12 }}>
       {stale ? (
         <button className="badge brand" onClick={onAnalyse} style={{ height: 30, cursor: "pointer", justifyContent: "center" }}>
-          <Icon name="refresh" size={14} /> New candle closed — re-analyse
+          <Icon name="refresh" size={14} /> A new candle closed: analyse again
         </button>
       ) : null}
       <div className={`verdict ${tone}`} data-tour="verdict">
         <div className="row" style={{ alignItems: "flex-start" }}>
           <div className="grow">
-            <div className="faint" style={{ fontSize: "0.76rem", fontWeight: 700, letterSpacing: "0.08em" }}>
-              {res.symbol} · {res.tf} · {fmtPrice(res.price, dec)}
+            <div className="faint" style={{ fontSize: "0.76rem", fontWeight: 700 }}>{res.symbol} · {res.tf} · {fmtPrice(res.price, dec)}</div>
+            <div className="act" style={{ color: tone === "buy" ? "var(--act-buy)" : tone === "sell" ? "var(--act-sell)" : "var(--act-wait)" }}>
+              {showLevels ? v.action : (v.side === "long" ? "Leaning up" : v.side === "short" ? "Leaning down" : "No clear edge")}
             </div>
-            <div className="act" style={{ color: tone === "buy" ? "var(--act-buy)" : tone === "sell" ? "var(--act-sell)" : "var(--act-wait)" }}>{v.action}</div>
           </div>
-          <span className={`grade ${gradeClass(v.grade)}`}>{v.grade}</span>
+          {showLevels ? <span className={`grade ${gradeClass(v.grade)}`}>{v.grade}</span> : null}
         </div>
+        <div className="row wrap" style={{ gap: 6, marginTop: 6 }}><Confidence c={v.confidence} /></div>
         <div style={{ fontSize: "0.88rem", marginTop: 6 }} className="muted">{v.headline}</div>
-        {v.news_warning ? (
-          <div className="badge down" style={{ marginTop: 10, height: "auto", padding: "7px 10px", whiteSpace: "normal", lineHeight: 1.4 }}>
-            <Icon name="alert" size={14} style={{ flex: "none" }} /> {v.news_warning}
-          </div>
+        {v.confidence && v.confidence.reasons && v.confidence.reasons.length ? (
+          <ul className="conf-why">{v.confidence.reasons.slice(0, 4).map((r, i) => <li key={i}>{r}</li>)}</ul>
         ) : null}
-        <div className="row" style={{ marginTop: 12, gap: 8 }}>
+        {conflict && conflict.buyers && conflict.sellers && conflict.buyers.length && conflict.sellers.length ? (
+          <div className="lc-note warn" style={{ marginTop: 8 }}><Icon name="alert" size={14} /> {conflict.note}</div>
+        ) : null}
+        {v.news_warning ? (
+          <div className="lc-note down" style={{ marginTop: 8 }}><Icon name="alert" size={14} /> {v.news_warning}</div>
+        ) : null}
+        {v.tf_note ? <div className="tf-note">{v.tf_note}</div> : null}
+        <div className="row wrap" style={{ marginTop: 12, gap: 8 }}>
           <button className="btn sm primary" onClick={() => onAsk(`Explain this ${res.symbol} ${res.tf} analysis to me. Why ${v.action}?`)}>
             <Icon name="sparkles" size={15} /> Ask StreixAI why
           </button>
           <button className="btn sm" onClick={onAnalyse} disabled={busy}><Icon name="refresh" size={15} /> {busy ? "Analysing…" : "Refresh"}</button>
-          {onClean ? (
-            <button className="btn sm" onClick={onClean} title="Remove this analysis from the chart"><Icon name="trash" size={15} /> Clean analysis</button>
-          ) : null}
+          {onClean ? <button className="btn sm" onClick={onClean} title="Remove this analysis from the chart"><Icon name="trash" size={15} /> Clean</button> : null}
         </div>
       </div>
+
+      {res.fixed_time ? <FixedTime ft={res.fixed_time} /> : null}
+      {showLevels && res.plan ? (
+        <LevelsCard p={res.plan} dec={dec} symbol={res.symbol} tf={res.tf} toast={toast} title={v.trade ? "The plan" : "If conditions improve"}
+          onEdit={onEditPlan ? (p) => onEditPlan(p) : null} onAlert={symbol ? planAlert : null} />
+      ) : null}
+      {showLevels ? <HowToEnter steps={res.how_to_enter} /> : null}
+      <Mtf mtf={res.mtf} />
+      <Strategies sb={res.strategies} onChange={onStrategies} />
+      <Liquidity liq={res.liquidity} dec={dec} />
 
       {res.probabilities ? (
         <div data-tour="direction">
           <DirectionBar probs={res.probabilities} decimals={dec} trained={model.trained !== false} />
         </div>
       ) : null}
-      <div data-tour="plan">
-        <PlanCard p={res.plan} dec={dec} isCrypto={isCrypto} title={v.trade ? "The plan" : "Conditional plan"} onAlert={symbol ? (p) => planAlert(p) : null} onEdit={onEditPlan || null} />
-      </div>
+      {showLevels && res.plan ? (
+        <details className="fold">
+          <summary>Odds, size & leverage</summary>
+          <div><PlanCard p={res.plan} dec={dec} isCrypto={isCrypto} title={v.trade ? "The plan" : "Conditional plan"} onAlert={null} onEdit={null} /></div>
+        </details>
+      ) : null}
 
       {res.tendencies && res.tendencies.length ? (
-        <div className="card" style={{ padding: 14, marginTop: 10 }}>
+        <div className="card" style={{ padding: 14 }}>
           <b style={{ fontSize: "0.92rem" }}>Your tendencies</b>
           <div className="hint" style={{ margin: "4px 0 8px" }}>From your own replays, so the plan fits how you trade.</div>
           {res.tendencies.map((t, i) => <div key={i} className="hint" style={{ lineHeight: 1.5, marginTop: i ? 8 : 0 }}>{t}</div>)}
         </div>
       ) : null}
       {res.learning && res.learning.message ? (
-        <div className="card" style={{ padding: 14, marginTop: 10 }}>
+        <div className="card" style={{ padding: 14 }}>
           <b style={{ fontSize: "0.92rem" }}>What the analyst&apos;s record says</b>
-          <div className="hint" style={{ margin: "4px 0 8px" }}>
-            From {res.learning.settled} settled calls, live and replayed, checked on the candles that came after.
-          </div>
+          <div className="hint" style={{ margin: "4px 0 8px" }}>From {res.learning.settled} settled calls, live and replayed, checked on the candles that came after.</div>
           <div className="hint" style={{ lineHeight: 1.5 }}>{res.learning.message}</div>
         </div>
       ) : null}
       {res.plan && res.plan.checklist ? (
-        <details className="fold" open>
+        <details className="fold">
           <summary>Why this grade <span className="faint num">{Number(res.plan.score).toFixed(1)}/10</span></summary>
           <div>
             <ul className="check-list">
@@ -322,36 +504,15 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
                 <li key={i} className={c.ok ? "ok" : "no"}><span className="ic">{c.ok ? "✓" : "✗"}</span><span>{c.text}</span></li>
               ))}
             </ul>
-            {res.plan.why && res.plan.why.length ? (
-              <div className="hint" style={{ marginTop: 10 }}>Setup: {res.plan.setup}</div>
-            ) : null}
+            {res.plan.why && res.plan.why.length ? <div className="hint" style={{ marginTop: 10 }}>Setup: {res.plan.setup}. {res.plan.why.join("; ")}.</div> : null}
           </div>
         </details>
       ) : null}
 
-      <details className="fold" open={!!(res.news && res.news.risk !== "low")}>
+      <details className="fold" open={!!(res.news && res.news.risk === "high")}>
         <summary>News & calendar {res.news ? <span className={`badge ${res.news.risk === "high" ? "down" : res.news.risk === "medium" ? "warn" : "up"}`}>{res.news.risk} risk</span> : null}</summary>
         <div><News news={res.news} /></div>
       </details>
-
-      {res.timeframes && res.timeframes.length ? (
-        <details className="fold">
-          <summary>Bigger picture</summary>
-          <div className="stack" style={{ gap: 8 }}>
-            {res.timeframes.map((t) => (
-              <div key={t.tf} className="row" style={{ fontSize: "0.86rem", alignItems: "flex-start" }}>
-                <span className={`badge ${t.trend > 0 ? "up" : t.trend < 0 ? "down" : ""}`} style={{ minWidth: 42, justifyContent: "center" }}>{t.tf}</span>
-                <div className="grow">
-                  <b style={{ textTransform: "capitalize" }}>{t.trend_word}</b> <span className="faint">· {t.phase}{t.zone ? ` · ${t.zone}` : ""}</span>
-                  {t.p_up !== undefined ? (
-                    <div className="faint" style={{ fontSize: "0.76rem" }}>Next 24 candles: ↑ {fmtPct(t.p_up)} · ↓ {fmtPct(t.p_down)} · ↔ {fmtPct(t.p_flat)}</div>
-                  ) : null}
-                </div>
-              </div>
-            ))}
-          </div>
-        </details>
-      ) : null}
 
       {res.levels && res.levels.length ? (
         <details className="fold">
@@ -395,27 +556,20 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
         </details>
       ) : null}
 
-      {res.alternative ? (
+      {showLevels && res.alternative ? (
         <details className="fold">
-          <summary>Alternative plan</summary>
-          <div><PlanCard p={res.alternative} dec={dec} isCrypto={isCrypto} title="If it goes the other way" dim onAlert={symbol ? (p) => planAlert(p) : null} onEdit={onEditPlan || null} /></div>
+          <summary>If it goes the other way</summary>
+          <div><PlanCard p={res.alternative} dec={dec} isCrypto={isCrypto} title="Alternative plan" dim onAlert={symbol ? (p) => planAlert(p) : null} onEdit={onEditPlan || null} /></div>
         </details>
       ) : null}
 
       <details className="fold">
-        <summary>Chart layers</summary>
+        <summary>On the chart</summary>
         <div className="stack" style={{ gap: 10 }}>
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <span className="muted" style={{ fontSize: "0.86rem" }}>Detail</span>
-            <div className="seg brand">
-              {[[1, "Essentials"], [2, "Normal"], [3, "Everything"]].map(([n, l]) => (
-                <button key={n} className={detail === n ? "on" : ""} onClick={() => setDetail(n)}>{l}</button>
-              ))}
-            </div>
-          </div>
-          <label className="check"><input type="checkbox" checked={showAlt} onChange={(e) => setShowAlt(e.target.checked)} /> Show the alternative plan</label>
+          <div className="hint">{res.layers_scope ? "The chart shows what your strategies use. Tap any drawing on the chart to see why it's there; tap an EP, SL or TP label to copy it." : "Tap any drawing on the chart to see why it's there; tap an EP, SL or TP label to copy it."}</div>
+          {showLevels ? <label className="check"><input type="checkbox" checked={showAlt} onChange={(e) => setShowAlt(e.target.checked)} /> Show the alternative plan</label> : null}
           <div className="grid-2" style={{ gap: 6 }}>
-            {layers.map((l) => (
+            {layers.filter((l) => !res.layers_scope || res.layers_scope.includes(l.id) || l.id === "indicators").map((l) => (
               <label key={l.id} className="check" style={{ fontSize: "0.84rem" }}>
                 <input type="checkbox" checked={!hiddenLayers.has(l.id)} onChange={() => toggleLayer(l.id)} /> {LAYERS[l.id] || l.id}
               </label>
@@ -441,7 +595,7 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
                 <span className={`badge ${model.edge_proven ? "up" : "warn"}`}>{model.edge_proven ? "Edge proven in testing" : "No proven edge yet"}</span>
               </div>
               {!model.edge_proven ? (
-                <div className="muted">The odds are calibrated, but testing hasn't proven that following every plan makes money after costs. Use the analysis to structure decisions and manage risk — not as a guarantee.</div>
+                <div className="muted">The odds are calibrated, but testing hasn't proven that following every plan makes money after costs. Use the analysis to structure decisions and manage risk, not as a guarantee.</div>
               ) : <div className="muted">Past test results don't guarantee future results. Keep risk small.</div>}
             </>
           ) : (

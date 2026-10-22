@@ -72,3 +72,15 @@ def fit(symbol: str, tf: str = "1h", user: User = Depends(verified_user), db: Se
 def get_findings():
     """The latest research run: which strategies did best on the main markets and timeframes."""
     return findings.load() or dict(runs=[], note="No research run yet. It runs on the server every 12 hours.")
+
+
+@router.get("/overlay")
+def overlay(symbol: str, tf: str = "1h", id: str = "", user: User = Depends(current_user)):
+    """One strategy's trades and lines on this chart (Indicators > Strategies)."""
+    sym = (symbol or "").strip()
+    if not sym or len(sym) > 64 or id not in st.BY_ID:
+        raise HTTPException(422, "Pick a strategy and a market.")
+    try:
+        return engine.strategy_overlay(sym, tf, id)
+    except engine.EngineError as e:
+        raise HTTPException(422, str(e))

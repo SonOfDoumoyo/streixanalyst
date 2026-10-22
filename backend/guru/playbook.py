@@ -106,6 +106,16 @@ def guard(p, X):
     d, entry, sl = p["dir"], p["entry"], p["sl"]
     depth = X["depth"]
     new_sl, pool = st.guard_stop(ctx, i, d, entry, sl, depth)
+    # the analyst's key levels too (zones, equal highs/lows, previous day/week levels): a stop a few ticks past one of
+    # them is the first thing a sweep takes, so it goes past the level by the same stop-hunt depth
+    buf = (depth + 0.05) * atr
+    lv = [c["price"] for c in X.get("clusters") or []
+          if d * (entry - c["price"]) > 0.15 * atr and -0.5 * atr <= d * (c["price"] - new_sl) < buf]
+    if lv:
+        far = min(lv) if d == 1 else max(lv)
+        cand = far - d * buf
+        if d * (new_sl - cand) > 0 and abs(cand - entry) <= 2.5 * abs(sl - entry):
+            new_sl, pool = cand, far
     keep = {k: p[k] for k in ("zone", "strategy", "strategy_name", "signal_age", "family") if k in p}
     if pool is not None and abs(new_sl - sl) > 1e-12:
         moved = abs(new_sl - entry) / max(abs(sl - entry), 1e-12)
@@ -261,6 +271,14 @@ def soften(verdict, p, X, conf, clash):
         return v
     if clash and clash.get("sellers") and clash.get("buyers"):
         v["conflict"] = clash
+    # the grade never says more than the confidence does: an "A" with low confidence reads as a promise
+    cap = {"low": "C", "moderate": "B"}.get(conf.get("level"))
+    order = ["A+", "A", "B", "C", "D"]
+    if cap and p is not None:
+        for obj in (v, p):
+            g = obj.get("grade")
+            if g in order and order.index(g) < order.index(cap):
+                obj["grade"] = cap
     if v.get("trade") and p is not None:
         word = "BUY" if p["dir"] == 1 else "SELL"
         how = {"market": "now (market)", "limit": f"limit at {X['f'].p(p['entry'])}",
