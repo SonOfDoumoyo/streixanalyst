@@ -66,7 +66,7 @@ def load_brain(path=None):
         BRAIN.update(brain=brain, status="trained", loaded_at=time.time(),
                      detail=dict(created=brain.b.get("created"), version=brain.b.get("version"),
                                  rows=card.get("rows"), sklearn=built_with, warnings=ver,
-                                 skill=ga.model_skill(brain)))
+                                 skill=ga.model_skill(brain), heads=heads_info(brain)))
     except Exception as e:
         log.exception("brain load failed")
         BRAIN.update(brain=gm.FallbackBrain(), status="error",
@@ -74,6 +74,22 @@ def load_brain(path=None):
                             "scikit-learn version matches the notebook's.")
         ga.use_brain(BRAIN["brain"])
     return BRAIN
+
+
+def heads_info(brain):
+    """What the Notebook 10 heads in this brain are used for (the notebook's tests decide each `use` flag)."""
+    out = {}
+    liq, strat = getattr(brain, "liq", None), getattr(brain, "strat", None)
+    if liq:
+        c = liq.get("card", {})
+        out["liquidity"] = dict(use=liq.get("use"), rows=c.get("rows"),
+                                sweep_auc=(c.get("sweep") or {}).get("auc_model"),
+                                reverse_auc=(c.get("reverse") or {}).get("auc_model"),
+                                depth_coverage=(c.get("depth") or {}).get("coverage_model"))
+    if strat:
+        c = strat.get("card", {})
+        out["strategies"] = dict(use=strat.get("use"), rows=c.get("rows"), auc=(c.get("model") or {}).get("auc_model"))
+    return out
 
 
 def brain():

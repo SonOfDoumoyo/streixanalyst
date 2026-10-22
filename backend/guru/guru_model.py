@@ -935,6 +935,10 @@ class Brain:
         self.b = bundle
         self.m = bundle["models"]
         self.k_dir = bundle["k_dir"]
+        # heads trained in Notebook 10 (None in older brains): liquidity (liquidity_head.py), strategies
+        # (strategy_head.py)
+        self.liq = bundle.get("liquidity_head")
+        self.strat = bundle.get("strategy_head")
 
     def race(self, row, sides, a_atr, b_atr):
         sides, a_atr, b_atr = np.broadcast_arrays(np.atleast_1d(np.asarray(sides, dtype=float)),
@@ -984,6 +988,8 @@ class FallbackBrain:
     """Random-walk approximations, used only when no trained bundle is loaded (flagged as 'untrained')."""
     k_dir = 3.0
     untrained = True
+    liq = None
+    strat = None
 
     def __init__(self):
         self.b = dict(card={}, level_stats=pd.DataFrame(), setup_stats=pd.DataFrame(), fill_ratio=0.85)

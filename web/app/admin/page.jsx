@@ -370,6 +370,12 @@ function System({ toast }) {
             Trained {det.created} · version {det.version} · {det.rows && det.rows.race ? Number(det.rows.race).toLocaleString() : "?"} rows ·{" "}
             {det.skill && det.skill.edge_proven ? "edge proven in testing" : "no proven edge (honest mode)"}
             {det.warnings && det.warnings.length ? <div className="warn">Warning: {det.warnings.join(" ")}</div> : null}
+            {det.heads && (det.heads.liquidity || det.heads.strategies) ? (
+              <div style={{ marginTop: 6 }}>
+                {det.heads.liquidity ? <div>Liquidity head: sweep odds {ok(det.heads.liquidity.use && det.heads.liquidity.use.sweep)} reversal odds {ok(det.heads.liquidity.use && det.heads.liquidity.use.reverse)} learned stop depth {ok(det.heads.liquidity.use && det.heads.liquidity.use.depth)}</div> : null}
+                {det.heads.strategies ? <div>Strategy head: per-signal odds {ok(det.heads.strategies.use && det.heads.strategies.use.odds)} · {det.heads.strategies.rows ? Number(det.heads.strategies.rows.all).toLocaleString() : "?"} trades of {det.heads.strategies.rows ? det.heads.strategies.rows.strategies : "?"} strategies</div> : null}
+              </div>
+            ) : <div className="faint">No Notebook 10 heads in this model (liquidity and strategy history).</div>}
           </div>
         ) : <div className="muted" style={{ fontSize: "0.9rem" }}>{String(b.detail || "")}</div>}
         <div className="hint">Path on the server: {b.path}. Upload guru_brain.joblib from the notebook's Drive folder (trading_ai/guru), or copy it to that path and press Reload. Only upload files you trained yourself.</div>

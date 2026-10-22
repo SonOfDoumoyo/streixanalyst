@@ -43,6 +43,8 @@ export default function StrategyPicker({ open, onClose, symbol, tf, forced = fal
   const [fitBusy, setFitBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [openId, setOpenId] = useState(null);
+  const [hist, setHist] = useState(null);
+  const [byHist, setByHist] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -50,6 +52,15 @@ export default function StrategyPicker({ open, onClose, symbol, tf, forced = fal
     setSel(mine.length ? mine : []);
     setFit(null);
   }, [open, user]);
+  // what years of history say about each strategy on this market (the trained model's strategy history)
+  useEffect(() => {
+    if (!open || !symbol) return;
+    let alive = true;
+    get(`/strategies/history?symbol=${encodeURIComponent(symbol)}&tf=${encodeURIComponent(tf)}`)
+      .then((d) => alive && setHist(d && d.available ? d : null)).catch(() => alive && setHist(null));
+    return () => { alive = false; };
+  }, [open, symbol, tf]);
+  const histBy = useMemo(() => Object.fromEntries(((hist && hist.rows) || []).map((r) => [r.id, r])), [hist]);
 
   const fitBy = useMemo(() => Object.fromEntries(((fit && fit.rows) || []).map((r) => [r.id, r])), [fit]);
   const findings = cat && cat.findings && cat.findings.best ? cat.findings.best[`${symbol}|${tf}`] : null;
@@ -59,8 +70,9 @@ export default function StrategyPicker({ open, onClose, symbol, tf, forced = fal
     let rows = cat.strategies.filter((s) => (group === "all" || s.group === group)
       && (!needle || `${s.name} ${s.how} ${s.best_for}`.toLowerCase().includes(needle)));
     if (fit) rows = [...rows].sort((a, b) => ((fitBy[b.id] || {}).score || -9) - ((fitBy[a.id] || {}).score || -9));
+    else if (byHist) rows = [...rows].sort((a, b) => ((histBy[b.id] || {}).avg_r ?? -9) - ((histBy[a.id] || {}).avg_r ?? -9));
     return rows;
-  }, [cat, q, group, fit, fitBy]);
+  }, [cat, q, group, fit, fitBy, byHist, histBy]);
 
   if (!open) return null;
   const toggle = (id) => setSel((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
@@ -124,7 +136,11 @@ export default function StrategyPicker({ open, onClose, symbol, tf, forced = fal
             <span className="muted">Sorted by how each did on <b>{fit.symbol} · {fit.tf}</b> over {fit.candles} candles, after costs. Past results don't promise future ones.</span>
           ) : (
             <>
-              <span className="muted">{findings && findings.length ? <>Did best lately on {symbol} {tf}: <b>{findings.map((x) => x.name).join(", ")}</b>.</> : <>See which strategies have worked on <b>{symbol} · {tf}</b>.</>}</span>
+              <span className="muted">
+                {hist && hist.best && hist.best.length ? <>In years of history on {symbol} {tf}, best after costs: <b>{hist.best.slice(0, 3).map((x) => x.name).join(", ")}</b>. </> : null}
+                {findings && findings.length ? <>Did best lately: <b>{findings.map((x) => x.name).join(", ")}</b>.</> : !(hist && hist.best && hist.best.length) ? <>See which strategies have worked on <b>{symbol} · {tf}</b>.</> : null}
+              </span>
+              {hist ? <button className={`btn sm${byHist ? " primary" : ""}`} onClick={() => setByHist(!byHist)}><Icon name="book" size={14} /> {byHist ? "Sorted by history" : "Sort by history"}</button> : null}
               <button className="btn sm" onClick={testHere} disabled={fitBusy || !symbol}>{fitBusy ? <span className="spinner dark" /> : <Icon name="sliders" size={14} />} Test all on {symbol}</button>
             </>
           )}
@@ -144,6 +160,11 @@ export default function StrategyPicker({ open, onClose, symbol, tf, forced = fal
                     <span className="sp-tags">
                       <i>{s.timeframes.join(" · ")}</i>
                       {s.fixed_time ? <i className="ft">expiry {s.expiry} candles</i> : <i>target {s.rr}R</i>}
+                      {histBy[s.id] && histBy[s.id].trades ? (
+                        <i className={(histBy[s.id].avg_r || 0) > 0 ? "good" : "bad"} title={histBy[s.id].scope === "market" ? `Years of history on ${symbol} ${tf}` : `Years of history on markets like ${symbol}`}>
+                          history{histBy[s.id].scope === "kind" ? " (similar markets)" : ""}: {histBy[s.id].trades.toLocaleString()} trades · {pct(histBy[s.id].win_rate)} won · {(histBy[s.id].avg_r || 0) >= 0 ? "+" : ""}{Number(histBy[s.id].avg_r || 0).toFixed(2)}R
+                        </i>
+                      ) : null}
                       {f && f.trades ? (
                         <i className={(f.score || 0) > 0 ? "good" : "bad"}>{f.trades} trades · {pct(f.win_rate)} won · {f.fixed_time ? `${pct(f.breakeven)} needed` : `${(f.avg_r || 0) >= 0 ? "+" : ""}${(f.avg_r || 0).toFixed(2)}R avg`}</i>
                       ) : f ? <i>no trades here</i> : null}

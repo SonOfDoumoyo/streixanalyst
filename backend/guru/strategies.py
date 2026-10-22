@@ -557,23 +557,42 @@ class Ctx:
             return float(np.clip(np.percentile(d, 80), 0.12, 1.5))
         return self.get("sweep_depth", f)
 
+    def pool_table(self):
+        """Every confirmed swing as arrays: side (+1 high, -1 low), price, candle, the candle it became known, and the
+        first candle that traded through it (n while none has). Computed once, so liquidity lookups are fast."""
+        def f():
+            piv = self.pivots()
+            m = len(piv)
+            side = np.empty(m, dtype=int)
+            price = np.empty(m, dtype=float)
+            idx = np.empty(m, dtype=int)
+            conf = np.empty(m, dtype=int)
+            taken = np.full(m, self.n, dtype=int)
+            for k, p in enumerate(piv):
+                sd, q, ix = (1 if p["type"] == "high" else -1), float(p["price"]), int(p["idx"])
+                side[k], price[k], idx[k], conf[k] = sd, q, ix, int(p["confirmed_idx"])
+                arr = self.h if sd == 1 else self.l
+                start = ix + 1
+                for span in (256, self.n):                  # most swings are taken soon; search near first
+                    seg = arr[start:start + span]
+                    hit = np.flatnonzero(seg > q) if sd == 1 else np.flatnonzero(seg < q)
+                    if len(hit):
+                        taken[k] = start + int(hit[0])
+                        break
+                    start += span
+                    if start >= self.n:
+                        break
+            return dict(side=side, price=price, idx=idx, conf=conf, taken=taken)
+        return self.get("pool_table", f)
+
     def pools(self, i, side, look=150):
         """Untaken liquidity at candle i: confirmed swing lows (side=-1) or highs (side=1) no candle has traded through
         since, within the last `look` candles. Equal lows/highs are among them (two swings at one price)."""
-        out = []
-        lo_i = max(0, i - look)
-        for p in self.pivots():
-            if p["confirmed_idx"] > i or p["idx"] < lo_i:
-                continue
-            if side == -1 and p["type"] == "low":
-                seg = self.l[p["idx"] + 1:i + 1]
-                if not len(seg) or seg.min() >= p["price"]:
-                    out.append(p["price"])
-            elif side == 1 and p["type"] == "high":
-                seg = self.h[p["idx"] + 1:i + 1]
-                if not len(seg) or seg.max() <= p["price"]:
-                    out.append(p["price"])
-        return out
+        T = self.pool_table()
+        if not len(T["side"]):
+            return []
+        m = (T["side"] == side) & (T["conf"] <= i) & (T["idx"] >= max(0, i - look)) & (T["taken"] > i)
+        return [float(x) for x in T["price"][m]]
 
 
 # ───────────────────────────── signals ─────────────────────────────
@@ -1261,13 +1280,63 @@ def default_target(ctx, sid, i, d, entry, stop):
 
 
 # ───────────────────────────── the record (backtest) ─────────────────────────────
-def backtest(ctx, sid, cost_frac=0.0, slip_frac=0.0, guard=True, start=0):
+def trade_at(ctx, sid, i, d, cost_frac=0.0, slip_frac=0.0, guard=True, depth=None):
+    """One trade of a price strategy signalled on candle i in direction d, run the app's way: entry at the next
+    candle's open, the strategy's stop (moved past nearby liquidity by the guard), its target, the stop first when a
+    candle touches both, and a close at the time limit. Returns the trade, or None when the signal is skipped (no
+    room for a stop, or costs too large for the risk)."""
+    s = BY_ID[sid]
+    O, H, L, C = ctx.o, ctx.h, ctx.l, ctx.c
+    n = ctx.n
+    e = i + 1
+    if e >= n:
+        return None
+    entry = float(O[e])
+    stop = default_stop(ctx, sid, i, d, float(C[i]))
+    if d * (entry - stop) <= 0:
+        return None
+    pool = None
+    if guard:
+        stop, pool = guard_stop(ctx, i, d, entry, stop, ctx.sweep_depth() if depth is None else depth)
+    risk = d * (entry - stop)
+    if risk < 0.25 * ctx.atr[i] or cost_frac * entry > 0.5 * risk:
+        return None
+    target = default_target(ctx, sid, i, d, entry, stop)
+    if d * (target - entry) <= 0:
+        return None
+    last = min(n - 1, e + s["hold"] - 1)
+    lo, hi = L[e:last + 1], H[e:last + 1]
+    hs = np.flatnonzero(lo <= stop) if d == 1 else np.flatnonzero(hi >= stop)
+    ht = np.flatnonzero(hi >= target) if d == 1 else np.flatnonzero(lo <= target)
+    ks = int(hs[0]) if len(hs) else None
+    kt = int(ht[0]) if len(ht) else None
+    times = ctx.df.index
+    base = dict(side="long" if d == 1 else "short", i=int(i), entry_i=int(e), t=str(times[e]), entry=entry,
+                stop=float(stop), target=float(target), guarded=pool is not None)
+    if ks is not None and (kt is None or ks <= kt):           # the stop first, also when one candle touches both
+        j = e + ks
+        gap = (O[j] < stop) if d == 1 else (O[j] > stop)
+        exit_px, reason = (O[j] if gap else stop) - d * slip_frac * entry, "stop"
+    elif kt is not None:
+        j = e + kt
+        exit_px, reason = target, "target"
+    else:
+        if last >= n - 1 and n - 1 - e < s["hold"] - 1:
+            return dict(base, open=True)
+        j = last
+        exit_px, reason = float(C[last]), "time"
+    r = d * (exit_px - entry) / risk - cost_frac * entry / risk
+    return dict(base, open=False, exit_i=int(j), exit=float(exit_px), reason=reason, r=float(r), bars=int(j - e + 1))
+
+
+def backtest(ctx, sid, cost_frac=0.0, slip_frac=0.0, guard=True, start=0, overlap=False):
     """Trades the strategy would have taken on this frame. Price strategies return R multiples after costs;
-    fixed-time strategies return wins and losses at expiry."""
+    fixed-time strategies return wins and losses at expiry. overlap=True takes every signal, also while an earlier
+    trade is still running (used to train the strategy model); the app's record takes one trade at a time."""
     s = BY_ID[sid]
     sg = signals(ctx, sid)
     lng, sht = sg["long"], sg["short"]
-    O, H, L, C = ctx.o, ctx.h, ctx.l, ctx.c
+    C = ctx.c
     n = ctx.n
     times = ctx.df.index
     trades = []
@@ -1281,62 +1350,33 @@ def backtest(ctx, sid, cost_frac=0.0, slip_frac=0.0, guard=True, start=0):
                 i += 1
                 continue
             if i + N >= n:
-                trades.append(dict(open=True, side="up" if d == 1 else "down", i=int(i), t=str(times[i]),
-                                   entry=float(C[i]), expiry=N))
+                if not overlap:
+                    trades.append(dict(open=True, side="up" if d == 1 else "down", i=int(i), t=str(times[i]),
+                                       entry=float(C[i]), expiry=N))
                 break
             win = d * (C[i + N] - C[i]) > 0
             trades.append(dict(open=False, side="up" if d == 1 else "down", i=int(i), t=str(times[i]),
                                entry=float(C[i]), exit=float(C[i + N]), expiry=N, win=bool(win),
                                r=float(FT_PAYOUT if win else -1.0)))
-            i += N
+            i += 1 if overlap else N
         return trades
     while i < n - 1:
         d = 1 if lng[i] else -1 if sht[i] else 0
         if d == 0:
             i += 1
             continue
-        e = i + 1
-        entry = float(O[e])
-        stop = default_stop(ctx, sid, i, d, float(C[i]))
-        if d * (entry - stop) <= 0:
+        t = trade_at(ctx, sid, i, d, cost_frac, slip_frac, guard, depth)
+        if t is None:
             i += 1
             continue
-        pool = None
-        if guard:
-            stop, pool = guard_stop(ctx, i, d, entry, stop, depth)
-        risk = d * (entry - stop)
-        if risk < 0.25 * ctx.atr[i] or cost_frac * entry > 0.5 * risk:
+        if t["open"]:
+            if not overlap:
+                trades.append(t)
+                break
             i += 1
             continue
-        target = default_target(ctx, sid, i, d, entry, stop)
-        if d * (target - entry) <= 0:
-            i += 1
-            continue
-        exit_px = reason = None
-        last = min(n - 1, e + s["hold"] - 1)
-        j = e
-        for j in range(e, last + 1):
-            hit_stop = L[j] <= stop if d == 1 else H[j] >= stop
-            hit_tp = H[j] >= target if d == 1 else L[j] <= target
-            if hit_stop:
-                gap = (O[j] < stop) if d == 1 else (O[j] > stop)
-                exit_px, reason = (O[j] if gap else stop) - d * slip_frac * entry, "stop"
-                break
-            if hit_tp:
-                exit_px, reason = target, "target"
-                break
-        if exit_px is None:
-            if j >= n - 1 and n - 1 - e < s["hold"] - 1:
-                trades.append(dict(open=True, side="long" if d == 1 else "short", i=int(i), entry_i=int(e),
-                                   t=str(times[e]), entry=entry, stop=float(stop), target=float(target),
-                                   guarded=pool is not None))
-                break
-            exit_px, reason, j = float(C[last]), "time", last
-        r = d * (exit_px - entry) / risk - cost_frac * entry / risk
-        trades.append(dict(open=False, side="long" if d == 1 else "short", i=int(i), entry_i=int(e), exit_i=int(j),
-                           t=str(times[e]), entry=entry, stop=float(stop), target=float(target), exit=float(exit_px),
-                           reason=reason, r=float(r), bars=int(j - e + 1), guarded=pool is not None))
-        i = j + 1
+        trades.append(t)
+        i = i + 1 if overlap else t["exit_i"] + 1
     return trades
 
 

@@ -1573,3 +1573,11 @@ table.t tr:last-child td { border-bottom: 0; }
 .rp-type { display: flex; align-items: center; gap: 8px; padding: 10px 12px; margin-top: 4px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg-3);
   color: var(--text-2); font-size: 0.86rem; text-align: left; }
 .rp-type b { color: var(--text); }
+
+/* liquidity odds */
+.liq-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+.liq-table th { text-align: left; font-weight: 600; color: var(--text-3); padding: 4px 4px 6px; border-bottom: 1px solid var(--line); }
+.liq-table td { padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+.liq-table .r { text-align: right; white-space: nowrap; }
+.liq-bar { display: inline-block; width: 34px; height: 5px; margin-right: 6px; border-radius: 3px; vertical-align: middle;
+  background: linear-gradient(90deg, var(--brand) var(--p), var(--line-2) 0); }

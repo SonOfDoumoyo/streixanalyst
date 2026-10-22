@@ -20,8 +20,10 @@ import pandas as pd
 
 import guru_levels as gl
 import guru_model as gm
+import liquidity_head as lh
 import market_data as md
 import playbook as pb
+import strategy_head as sh
 import strategies as st
 import structure_engine as se
 
@@ -876,6 +878,10 @@ def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_draw
     X["chosen"] = pb.chosen(strategies)
     X["sctx"] = st.Ctx(dfe, tf, A, C["asset_class"])
     X["depth"] = X["sctx"].sweep_depth()
+    # the liquidity head (Notebook 10): every pool near price with its odds of being swept, of reversing after a
+    # sweep, and how deep hunts reach there. None without a trained head.
+    X["liq"] = _safe(lambda: lh.assess(getattr(brain, "liq", None), X["sctx"], row, tf, price), None, notes,
+                     "liquidity model")
     X["records"] = pb.records(X, X["chosen"])
     X["mtf"] = _safe(lambda: pb.mtf(X, symbol, HT, asof, X["chosen"]), dict(rows=[], alignment=0.0, text=""), notes,
                      "timeframe table")
@@ -894,6 +900,12 @@ def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_draw
     X["notes"] = notes
     plans = [evaluate_plan(p, X, brain) for p in make_plans(X)]
     plans = [p for p in plans if p["rr"][0] >= 0.8]
+    # the strategy head (Notebook 10): how signals like this one did across years of markets
+    for p in plans:
+        if p.get("strategy"):
+            p["head"] = _safe(lambda p=p: sh.score(getattr(brain, "strat", None), X["sctx"], row, p["strategy"],
+                                                   p["dir"], p["entry"], p["sl"], p["tps"][0], cost, slip),
+                              None, notes, "strategy model")
     best = {}
     for p in plans:
         key = p["side"]
@@ -986,7 +998,10 @@ def _strategies_block(X):
                           signal=lv.get("signal"), age=lv.get("age"), last=lv.get("last"), missed=lv.get("missed"),
                           wait_for=s["wait_for"], best_for=s["best_for"], record=rec.get("record"),
                           score=rec.get("score", 0.0), has_plan=plan is not None,
-                          suits_tf=X["tf"] in s["timeframes"], suits_market=_market_key(X) in s["markets"]))
+                          suits_tf=X["tf"] in s["timeframes"], suits_market=_market_key(X) in s["markets"],
+                          history=sh.evidence_for(getattr(X.get("brain"), "strat", None), sid, X["asset_class"],
+                                                  X["tf"]),
+                          head=(plan or {}).get("head")))
     return dict(mode="chosen", chosen=ids, items=items, conflict=X.get("conflict"))
 
 
@@ -1008,7 +1023,7 @@ def _public_plan(p, f):
     keep = ("side", "type", "setup", "family", "entry", "sl", "tps", "tp_labels", "rr", "p_fill", "p_tp", "p_sl",
             "p_open", "breakeven", "ev", "cost_r", "risk_atr", "chase_limit", "score", "grade", "hist_grade",
             "evidence", "checklist", "why", "invalidation", "expiry", "sizing", "zone", "strategy", "strategy_name",
-            "signal_age", "liquidity_guard", "sweep_first")
+            "signal_age", "liquidity_guard", "sweep_first", "head")
     out = {k: p.get(k) for k in keep}
     out["text"] = (f"{'BUY' if p['dir'] == 1 else 'SELL'} {p['type'].upper()} EP {f.p(p['entry'])} | SL {f.p(p['sl'])} | "
                    + " | ".join(f"TP{i + 1} {f.p(t)}" for i, t in enumerate(p["tps"])))

@@ -1388,6 +1388,65 @@ def t_strategy_engine(_c):
     check(v["action"].startswith("NO TRADE") or v["trade"] is False, v)
 
 
+def t_heads(c):
+    """Notebook 10's heads: trained on synthetic markets, then used by the analyst (liquidity odds, learned stop depth,
+    per-signal strategy odds, history in the picker), and absent heads change nothing."""
+    import synth
+    import guru_analyst as ga
+    import guru_model as gm
+    import liquidity_head as lh
+    import strategy_head as sh
+    agg = dict(open="first", high="max", low="min", close="last", volume="sum")
+    series = []
+    for name, sym, cls, sub in (("EUR/USD", "EURUSD", "fx", "fx_major"), ("BTC/USD", "BTCUSDT", "crypto", "crypto_major"),
+                                ("XAU/USD", "XAUUSD", "metal", "gold")):
+        df = synth.base15(name).resample("1h").agg(agg).dropna().tail(4500).astype(float)
+        series.append(dict(symbol=sym, tf="1h", asset_class=cls, sub=sub, df=df))
+    L = lh.build(series, budget=15000, log=lambda *a: None)
+    check({"y_sweep", "y_rev", "depth", "test"} <= set(L.columns) and L["d_atr"].between(0, lh.MAX_D).all(), L.shape)
+    hl = lh.train(L, log=lambda *a: None)
+    S = sh.build(series, budget=30000, log=lambda *a: None)
+    check(S["sid"].nunique() >= 30 and S["win"].isin([0, 1, True, False]).all(), S["sid"].nunique())
+    split = int(4500 * 0.7)
+    check((S.loc[~S["test"], "exit_i"] < split).all() and (S.loc[S["test"], "bar"] >= split).all(),
+          "purge: no training trade runs into the test period")
+    hs = sh.train(S, log=lambda *a: None)
+    check(len(hs["evidence_market"]) and set(hs["use"]) == {"odds"}, hs["use"])
+    # exercise every path whatever the gates said on this tiny synthetic set
+    hl["use"] = dict(sweep=True, reverse="reverse" in hl["models"], depth="depth" in hl["models"])
+    hs["use"] = dict(odds=True)
+
+    class B(gm.FallbackBrain):
+        liq, strat = hl, hs
+
+    ids = ["ict_sweep_mss", "ote_pullback", "sr_bounce", "supertrend", "ft_trend"]
+    res = ga.jsonable(ga.analyze("EURUSD", "1h", brain=B(), strategies=ids))
+    liq = res["liquidity"]
+    check(liq["learned"] and liq["pools"] and all(0 <= p["p_sweep"] <= 1 for p in liq["pools"]), liq)
+    check("Most likely taken first" in liq["text"] or "No pool near price" in liq["text"], liq["text"])
+    heads = [p["head"] for p in res["plans"] if p.get("head")]
+    check(all(0 <= h["p_win"] <= 1 and 0 < h["needed"] < 1 for h in heads), heads)
+    hist = [x["history"] for x in res["strategies"]["items"] if x.get("history")]
+    check(hist and all(h["trades"] > 0 for h in hist), res["strategies"]["items"][:2])
+    # no heads: nothing learned is claimed
+    plain = ga.jsonable(ga.analyze("EURUSD", "1h", brain=gm.FallbackBrain(), strategies=ids))
+    check(not plain["liquidity"]["learned"] and not any(p.get("head") for p in plain["plans"]), plain["liquidity"])
+    # the picker's history endpoint
+    signup(c, "hist@example.com")
+    old = engine.BRAIN["brain"]
+    try:
+        r = c.get("/api/strategies/history?symbol=EURUSD&tf=1h").json()
+        check(r["available"] is False, r)
+        engine.BRAIN["brain"] = B()
+        r = c.get("/api/strategies/history?symbol=EURUSD&tf=1h").json()
+        check(r["available"] and len(r["rows"]) >= 20 and r["rows"][0]["scope"] in ("market", "kind"), r)
+        r2 = c.get("/api/strategies/history?symbol=GBPUSD&tf=1h").json()
+        check(r2["available"] and all(x["scope"] == "kind" for x in r2["rows"]), r2["rows"][:2])
+        check(engine.heads_info(B())["strategies"]["use"]["odds"] is True, "admin sees the heads")
+    finally:
+        engine.BRAIN["brain"] = old
+
+
 def t_my_analyses(c):
     signup(c, "mine@example.com")
     c.put("/api/strategies/mine", json=dict(ids=["ict_sweep_mss", "ob_retest"]), headers=H)
@@ -1532,7 +1591,7 @@ def main():
         run("t_admin_accounts", t_admin_accounts, client())
         run("t_security", t_security, client())
         for t in (t_terms_and_site, t_stage2, t_practice, t_strategy, t_scalp_template, t_tracker_rules, t_track_record, t_alerts, t_push, t_replay,
-                  t_learning_export, t_strategies, t_strategy_engine, t_my_analyses, t_class_live, t_ideas, t_replay_gate):
+                  t_learning_export, t_strategies, t_strategy_engine, t_heads, t_my_analyses, t_class_live, t_ideas, t_replay_gate):
             run(t.__name__, t, client())
     bad = [r for r in RESULTS if not r[1]]
     print(f"\n{len(RESULTS) - len(bad)}/{len(RESULTS)} passed in {time.time() - t0:.0f}s")

@@ -74,6 +74,44 @@ def get_findings():
     return findings.load() or dict(runs=[], note="No research run yet. It runs on the server every 12 hours.")
 
 
+def _num(x):
+    try:
+        x = float(x)
+    except (TypeError, ValueError):
+        return None
+    return None if x != x else x                          # NaN → None (JSON)
+
+
+@router.get("/history")
+def history(symbol: str, tf: str = "1h", user: User = Depends(current_user)):
+    """What years of history say about every strategy on this market and timeframe (the brain's strategy head, from
+    Notebook 10): trades, win rate and average R after costs. Falls back to markets of the same kind when this market
+    wasn't in the training set."""
+    import guru_model as gm
+    import strategy_head as sh
+    head = getattr(engine.brain(), "strat", None)
+    if not head:
+        return dict(available=False, rows=[], best=[],
+                    note="The model on the server doesn't include strategy history yet (train Notebook 10).")
+    spec = engine.spec_of(symbol)
+    key = symbol.strip().upper().split(":")[-1].replace("/", "")
+    E, K = head["evidence_market"], head["evidence_class"]
+    g = E[(E["symbol"] == key) & (E["tf"] == tf)]
+    k = K[(K["asset_class"] == spec["asset_class"]) & (K["tf_group"] == gm.TF_GROUP.get(tf, ""))]
+    by_m = {r["sid"]: r for _, r in g.iterrows()}
+    by_k = {r["sid"]: r for _, r in k.iterrows()}
+    rows = []
+    for sid in sh.IDS:
+        r, scope = (by_m[sid], "market") if sid in by_m and by_m[sid]["trades"] >= 30 else (by_k.get(sid), "kind")
+        if r is None:
+            continue
+        rows.append(dict(id=sid, scope=scope, trades=int(r["trades"]), win_rate=_num(r["win_rate"]),
+                         avg_r=_num(r["avg_r"]), t_stat=_num(r["t_stat"])))
+    return dict(available=True, symbol=key, tf=tf, asset_class=spec["asset_class"], rows=rows,
+                best=[dict(b, t_stat=_num(b["t_stat"])) for b in sh.best_for(head, key, tf)],
+                created=head.get("created"), odds_used=bool((head.get("use") or {}).get("odds")))
+
+
 @router.get("/overlay")
 def overlay(symbol: str, tf: str = "1h", id: str = "", user: User = Depends(current_user)):
     """One strategy's trades and lines on this chart (Indicators > Strategies)."""

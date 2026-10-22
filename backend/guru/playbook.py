@@ -14,8 +14,10 @@ Research tool, not financial advice."""
 import numpy as np
 
 import guru_model as gm
+import liquidity_head as lh
 import market_data as md
 import strategies as st
+import strategy_head as sh
 import structure_engine as se
 
 # lower timeframe used to fine-tune entries, and the matrix shown for each chart timeframe
@@ -104,7 +106,7 @@ def guard(p, X):
     ctx, f, atr = X["sctx"], X["f"], X["atr"]
     i = ctx.n - 1
     d, entry, sl = p["dir"], p["entry"], p["sl"]
-    depth = X["depth"]
+    depth, learned = stop_depth(X, d, sl)
     new_sl, pool = st.guard_stop(ctx, i, d, entry, sl, depth)
     # the analyst's key levels too (zones, equal highs/lows, previous day/week levels): a stop a few ticks past one of
     # them is the first thing a sweep takes, so it goes past the level by the same stop-hunt depth
@@ -120,25 +122,61 @@ def guard(p, X):
     if pool is not None and abs(new_sl - sl) > 1e-12:
         moved = abs(new_sl - entry) / max(abs(sl - entry), 1e-12)
         why = p["why"] + [f"stop moved past the {'sell' if d == 1 else 'buy'}-side liquidity at {f.p(pool)}: stop hunts "
-                          f"on this chart usually reach {depth:.2f} ATR past a swing, so a stop just beyond it is "
-                          f"where they finish"]
+                          + (f"at pools like this usually reach {depth:.2f} ATR past them (learned from years of "
+                             f"markets)" if learned else f"on this chart usually reach {depth:.2f} ATR past a swing")
+                          + ", so a stop just beyond that is where they finish"]
         q = ga._plan(p["side"], p["type"], p["setup"], entry, new_sl,
                      ga._targets(X["clusters"], entry, new_sl, d, atr, extra=list(zip(p["tps"], p["tp_labels"]))),
                      why, p["invalidation"], p["expiry"], keep.get("family"), keep)
         if q is not None:
             q["liquidity_guard"] = dict(pool=float(pool), moved_from=float(sl), depth_atr=float(depth),
-                                        wider=float(moved))
+                                        wider=float(moved), learned=bool(learned))
             p = q
     # an obvious pool just past the entry on the stop side: price often takes it before going our way
     pools = ctx.pools(i, -d)
     close = [q for q in pools if 0 < d * (entry - q) <= 0.6 * atr and d * (q - p["sl"]) > 0]
     if close:
         lvl = max(close) if d == 1 else min(close)
-        p["sweep_first"] = dict(level=float(lvl), entry_after=float(lvl - d * 0.5 * depth * atr), note=(
-            f"{'Sell' if d == 1 else 'Buy'}-side liquidity at {f.p(lvl)} sits just {'under' if d == 1 else 'over'} the "
-            f"entry. Price often takes it first. Safer: wait for a sweep of {f.p(lvl)} and a close back "
-            f"{'above' if d == 1 else 'below'} it, or enter nearer {f.p(lvl - d * 0.5 * depth * atr)}."))
+        odds = pool_odds(X, lvl, -d)
+        ps = odds.get("p_sweep") if odds else None
+        if ps is None or ps >= 0.35:                      # the liquidity head can rule out a pool unlikely to be hit
+            extra = ""
+            if ps is not None:
+                extra = f" There's about a {round(ps * 100)}% chance it's taken within {LIQ_H} candles"
+                pr = odds.get("p_reverse")
+                extra += (f", and after sweeps of pools like it price reversed {round(pr * 100)}% of the time." if pr
+                          is not None else ".")
+            p["sweep_first"] = dict(level=float(lvl), entry_after=float(lvl - d * 0.5 * depth * atr), p_sweep=ps,
+                                    p_reverse=(odds or {}).get("p_reverse"), note=(
+                f"{'Sell' if d == 1 else 'Buy'}-side liquidity at {f.p(lvl)} sits just {'under' if d == 1 else 'over'} "
+                f"the entry. Price often takes it first.{extra} Safer: wait for a sweep of {f.p(lvl)} and a close back "
+                f"{'above' if d == 1 else 'below'} it, or enter nearer {f.p(lvl - d * 0.5 * depth * atr)}."))
     return p
+
+
+LIQ_H = 24
+
+
+def pool_odds(X, level, side):
+    """The liquidity head's numbers for the pool at `level` (side +1 above, -1 below price), or None."""
+    rows = X.get("liq") or []
+    best = None
+    for r in rows:
+        if r["side"] == side and abs(r["price"] - level) <= 0.05 * X["atr"]:
+            if best is None or abs(r["price"] - level) < abs(best["price"] - level):
+                best = r
+    return best
+
+
+def stop_depth(X, d, sl):
+    """How far past a pool to put a stop (ATR): the liquidity head's learned hunt depth for the pool nearest the
+    stop, when the head is trained and passed its test; else this chart's own 80th percentile. (depth, learned?)"""
+    rows = [r for r in (X.get("liq") or []) if r["side"] == -d and r.get("depth_atr") is not None]
+    if rows:
+        r = min(rows, key=lambda r: abs(r["price"] - sl))
+        if abs(r["price"] - sl) <= 1.5 * X["atr"]:
+            return float(np.clip(r["depth_atr"], 0.12, 1.5)), True
+    return float(X["depth"]), False
 
 
 def records(X, ids):
@@ -164,7 +202,11 @@ def records(X, ids):
 
 def rank_bonus(p, X):
     r = (X.get("records") or {}).get(p.get("strategy"))
-    return 2.0 * (r["score"] if r else 0.0)
+    bonus = 2.0 * (r["score"] if r else 0.0)
+    h = p.get("head")
+    if h:                                                 # years of similar signals, not just this chart's candles
+        bonus += 3.0 * float(np.clip(h["ev"], -0.5, 0.5))
+    return bonus
 
 
 def _htf_agree(X, d):
@@ -190,7 +232,9 @@ def conflict(plans, X):
         if not sid or not live_now:
             continue
         rec = (X.get("records") or {}).get(sid) or {}
-        w = max(0.2, 1.0 + rec.get("score", 0.0) + 0.5 * _htf_agree(X, p["dir"]))
+        h = p.get("head") or {}
+        w = max(0.2, 1.0 + rec.get("score", 0.0) + 0.5 * _htf_agree(X, p["dir"])
+                + float(np.clip(h.get("ev", 0.0), -0.5, 0.5)))
         votes.setdefault(sid, {})[p["dir"]] = max(votes.get(sid, {}).get(p["dir"], 0.0), w)
     long_w = sum(v.get(1, 0.0) for v in votes.values())
     short_w = sum(v.get(-1, 0.0) for v in votes.values())
@@ -233,9 +277,17 @@ def confidence(p, X):
         r = rec["record"]
         reasons.append(f"{p.get('strategy_name')} on this chart: {r['trades']} trades, {r['win_rate'] * 100:.0f}% won, "
                        f"{r['avg_r']:+.2f}R on average")
+    h = p.get("head")
+    if h:
+        pts += float(np.clip((h["p_win"] - h["needed"]) * 6, -1.0, 1.0))
+        reasons.append(f"across years of markets, {p.get('strategy_name') or 'this strategy'}'s signals like this one "
+                       f"ended in profit (at its own target or time limit) about {round(h['p_win'] * 100)}% of the time "
+                       f"(needs about {round(h['needed'] * 100)}%)")
     if p.get("sweep_first"):
         pts -= 0.5
-        reasons.append("liquidity right under the entry may be taken first")
+        ps = p["sweep_first"].get("p_sweep")
+        reasons.append("liquidity right under the entry may be taken first"
+                       + (f" ({round(ps * 100)}% chance within {LIQ_H} candles)" if ps is not None else ""))
     if X.get("brain") is not None and getattr(X["brain"], "untrained", False):
         pts = min(pts, 2.0)
         reasons.append("the odds model isn't trained yet, so the odds are rough")
@@ -409,9 +461,15 @@ def fixed_time(X, ids):
         n = rec.get("trades", 0)
         wr = rec.get("win_rate", 0.5)
         p = (wr * n + 0.5 * 30) / (n + 30)                       # shrunk toward a coin flip when there are few calls
+        head = None
+        if lv.get("signal"):
+            head = sh.score(getattr(X.get("brain"), "strat", None), ctx, X["row"], sid, lv["dir"], lv["entry"],
+                            lv["entry"], lv["entry"], X["cost"], X["slip"])
+            if head:                                          # years of history weigh more than one chart's candles
+                p = 0.7 * head["p_win"] + 0.3 * p
         calls.append(dict(id=sid, name=s["name"], signal=lv.get("signal"), dir=lv.get("dir"), expiry=s["expiry"],
                           expiry_minutes=s["expiry"] * mins, p_win=float(p), record=rec,
-                          last=lv.get("last")))
+                          last=lv.get("last"), head=head))
     live_calls = [c for c in calls if c["signal"]]
     be = 1 / (1 + st.FT_PAYOUT)
     out = dict(breakeven=be, payout=st.FT_PAYOUT, calls=calls, tf=X["tf"])
@@ -434,7 +492,9 @@ def fixed_time(X, ids):
         out.update(direction="UP" if d == 1 else "DOWN", expiry=best["expiry"], expiry_minutes=best["expiry_minutes"],
                    p_win=best["p_win"], edge=edge, strategy=best["name"],
                    text=(f"{'UP' if d == 1 else 'DOWN'} for {best['expiry']} candles ({best['expiry_minutes']} min) from "
-                         f"{best['name']}. On this chart such calls won about {round(best['p_win'] * 100)}% vs "
+                         f"{best['name']}. "
+                         f"{'Across years of markets and on this chart' if best.get('head') else 'On this chart'} "
+                         f"such calls won about {round(best['p_win'] * 100)}% vs "
                          f"{round(be * 100)}% needed at an {round(st.FT_PAYOUT * 100)}% payout"
                          + (": skip it, there's no edge." if edge <= 0.01 else ".")))
         if edge <= 0.01:
@@ -445,7 +505,8 @@ def fixed_time(X, ids):
 
 def liquidity_map(X):
     """The liquidity around price: the nearest untaken pools on each side, how deep stop hunts usually reach, and the
-    side price is most likely drawn to next."""
+    side price is most likely drawn to next. With the liquidity head (Notebook 10) every pool also gets its odds of
+    being swept within 24 candles and of reversing after the sweep, and the draw is the side most likely taken first."""
     ctx, f, price = X["sctx"], X["f"], X["price"]
     i = ctx.n - 1
     above = sorted(p for p in ctx.pools(i, 1) if p > price)[:4]
@@ -463,14 +524,32 @@ def liquidity_map(X):
     elif up or dn:
         draw = "above" if up else "below"
     tgt = up if draw == "above" else dn if draw == "below" else None
+    draw_level = None if tgt is None else float(tgt["price"])
+    draw_labels = None if tgt is None else tgt["labels"][:3]
+    learned = [r for r in (X.get("liq") or []) if r.get("p_sweep") is not None]
+    rows, odds_text = [], ""
+    if learned:
+        rows = [dict(price=r["price"], side="above" if r["side"] == 1 else "below", kind=lh.type_word(r),
+                     d_atr=round(r["d_atr"], 2), p_sweep=r["p_sweep"], p_reverse=r.get("p_reverse"),
+                     depth_atr=r.get("depth_atr")) for r in learned]
+        first = max(learned, key=lambda r: r["p_sweep"])
+        if first["p_sweep"] >= 0.25:
+            draw = "above" if first["side"] == 1 else "below"
+            draw_level, draw_labels = float(first["price"]), [lh.type_word(first)]
+            odds_text = (f"Most likely taken first: the {lh.type_word(first)} at {f.p(first['price'])} "
+                         f"({round(first['p_sweep'] * 100)}% within {LIQ_H} candles"
+                         + (f"; after sweeps there, price reversed {round(first['p_reverse'] * 100)}% of the time"
+                            if first.get("p_reverse") is not None else "") + "). ")
+        else:
+            odds_text = (f"No pool near price is likely to be taken within {LIQ_H} candles (the best chance is "
+                         f"{round(first['p_sweep'] * 100)}%). ")
     return dict(depth_atr=float(X["depth"]), above=[float(p) for p in above], below=[float(p) for p in below],
-                draw=draw, draw_level=None if tgt is None else float(tgt["price"]),
-                draw_labels=None if tgt is None else tgt["labels"][:3],
+                draw=draw, draw_level=draw_level, draw_labels=draw_labels, pools=rows, learned=bool(learned),
                 text=(f"Stop hunts on this chart usually reach {X['depth']:.2f} ATR past a swing. "
                       + (f"Nearest buy-side liquidity {f.p(above[0])}. " if above else "")
                       + (f"Nearest sell-side liquidity {f.p(below[0])}. " if below else "")
-                      + (f"Price looks drawn to the liquidity {'above' if draw == 'above' else 'below'} at "
-                         f"{f.p(tgt['price'])} ({', '.join(tgt['labels'][:2])})." if tgt else "")))
+                      + (odds_text or (f"Price looks drawn to the liquidity {'above' if draw == 'above' else 'below'} at "
+                                       f"{f.p(tgt['price'])} ({', '.join(tgt['labels'][:2])})." if tgt else ""))))
 
 
 def whatif(X, price, brain=None):

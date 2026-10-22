@@ -242,8 +242,11 @@ export function LevelsCard({ p, dec, symbol, tf, onEdit, onAlert, toast, title }
           </button>
         ))}
       </div>
+      {p.head ? (
+        <div className="lc-note"><Icon name="book" size={14} /> Across years of markets, signals like this ended in profit about {Math.round(p.head.p_win * 100)}% of the time (needs about {Math.round(p.head.needed * 100)}%).</div>
+      ) : null}
       {p.liquidity_guard ? (
-        <div className="lc-note"><Icon name="shield" size={14} /> Stop placed past the liquidity at {fmtPrice(p.liquidity_guard.pool, dec)}, where stop hunts usually finish ({Number(p.liquidity_guard.depth_atr).toFixed(2)} ATR on this chart).</div>
+        <div className="lc-note"><Icon name="shield" size={14} /> Stop placed past the liquidity at {fmtPrice(p.liquidity_guard.pool, dec)}, where stop hunts usually finish ({Number(p.liquidity_guard.depth_atr).toFixed(2)} ATR {p.liquidity_guard.learned ? "past pools like it, learned from years of markets" : "on this chart"}).</div>
       ) : null}
       {p.sweep_first ? <div className="lc-note warn"><Icon name="alert" size={14} /> {p.sweep_first.note}</div> : null}
       <div className="lc-actions">
@@ -334,6 +337,10 @@ function Strategies({ sb, onChange }) {
               {r.trades ? (
                 <div className="hint num">On this chart: {r.trades} trades · {Math.round((r.win_rate || 0) * 100)}% won · {r.breakeven ? `${Math.round(r.breakeven * 100)}% needed` : `${r.avg_r >= 0 ? "+" : ""}${Number(r.avg_r || 0).toFixed(2)}R avg`} · {r.verdict}</div>
               ) : <div className="hint">{r.verdict || "No trades on the loaded candles."}</div>}
+              {x.history ? (
+                <div className="hint num">Years of history on markets like this: {x.history.trades.toLocaleString()} trades · {Math.round(x.history.win_rate * 100)}% won · {x.history.avg_r >= 0 ? "+" : ""}{Number(x.history.avg_r).toFixed(2)}R avg</div>
+              ) : null}
+              {x.head ? <div className="hint num">This signal: about {Math.round(x.head.p_win * 100)}% chance of profit (needs {Math.round(x.head.needed * 100)}%).</div> : null}
             </div>
           );
         })}
@@ -358,14 +365,30 @@ function HowToEnter({ steps }) {
 function Liquidity({ liq, dec }) {
   if (!liq) return null;
   return (
-    <details className="fold">
+    <details className="fold" open={!!liq.learned}>
       <summary>Liquidity <span className="faint">{liq.draw ? `drawn ${liq.draw}` : ""}</span></summary>
       <div className="stack" style={{ gap: 8, fontSize: "0.85rem" }}>
         <div className="muted">{liq.text}</div>
-        <div className="grid-2">
-          <div><div className="faint" style={{ fontSize: "0.76rem" }}>Buy-side (above)</div>{(liq.above || []).map((x) => <div key={x} className="num down">{fmtPrice(x, dec)}</div>)}</div>
-          <div><div className="faint" style={{ fontSize: "0.76rem" }}>Sell-side (below)</div>{(liq.below || []).map((x) => <div key={x} className="num up">{fmtPrice(x, dec)}</div>)}</div>
-        </div>
+        {liq.learned && liq.pools && liq.pools.length ? (
+          <table className="liq-table">
+            <thead><tr><th>Pool</th><th className="r">Taken in 24c</th><th className="r">Then reversed</th></tr></thead>
+            <tbody>
+              {liq.pools.slice(0, 8).map((p, i) => (
+                <tr key={i}>
+                  <td><span className={`num ${p.side === "above" ? "down" : "up"}`}>{fmtPrice(p.price, dec)}</span> <span className="faint">{p.kind} · {p.d_atr} ATR</span></td>
+                  <td className="r num"><span className="liq-bar" style={{ "--p": `${Math.round(p.p_sweep * 100)}%` }} />{Math.round(p.p_sweep * 100)}%</td>
+                  <td className="r num">{p.p_reverse !== null && p.p_reverse !== undefined ? `${Math.round(p.p_reverse * 100)}%` : "–"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div className="grid-2">
+            <div><div className="faint" style={{ fontSize: "0.76rem" }}>Buy-side (above)</div>{(liq.above || []).map((x) => <div key={x} className="num down">{fmtPrice(x, dec)}</div>)}</div>
+            <div><div className="faint" style={{ fontSize: "0.76rem" }}>Sell-side (below)</div>{(liq.below || []).map((x) => <div key={x} className="num up">{fmtPrice(x, dec)}</div>)}</div>
+          </div>
+        )}
+        {liq.learned ? <div className="hint">Odds learned from years of markets: how often pools like these were taken within 24 candles, and how often price turned back after the sweep. Estimates, not promises.</div> : null}
       </div>
     </details>
   );

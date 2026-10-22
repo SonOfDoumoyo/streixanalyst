@@ -116,7 +116,14 @@ Any host that runs Docker works the same way (Railway, Fly.io in `fra`, a VPS…
 
 ### 3. Load the trained brain
 
-Notebook 7 (v1.3) saves `guru_brain_v13.joblib` in Google Drive at `trading_ai/guru_v13/`. Run it with `RETRAIN = True` so the brain includes the bull / bear bar calibration. You have two ways to load it:
+The newest brain comes from **Notebook 10** (`notebooks/trading_ai_10_strategies_liquidity.ipynb`, model v1.5). It keeps the main models of your last brain (Notebook 8 or 7) and adds two parts:
+
+- **Strategy head:** all 45 strategies in the picker, run on 30 markets and every timeframe the app's way. It gives each live signal its odds, and the picker shows what has worked on each market.
+- **Liquidity head:** for every pool near price, the chance it's swept within 24 candles, the chance price reverses after the sweep, and how deep hunts reach (the stop buffer).
+
+Each part is tested on the last 30% of the data and is only used by the app if it beats its baseline there. The notebook saves `guru_brain_v15.joblib` in Google Drive at `trading_ai/guru_v15/`. Open it in Colab from GitHub (File → Open notebook → GitHub). If you change any file in `backend/guru`, rebuild the notebook with `python notebooks/build_nb10.py`.
+
+Older brains: Notebook 7 (v1.3) saves `guru_brain_v13.joblib` in `trading_ai/guru_v13/`. Run it with `RETRAIN = True` so the brain includes the bull / bear bar calibration. You have two ways to load a brain:
 
 - **Upload it:** sign in as admin, open **Admin → System & model** and upload it.
 - **Copy it:** put it on the server at `GURU_BRAIN_PATH`, then press **Reload**.
