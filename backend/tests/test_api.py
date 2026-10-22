@@ -1561,6 +1561,53 @@ def t_replay_gate(c):
     check(lt["tf"] == "2h" and lt["candles"], lt)
 
 
+def t_hud(c):
+    """The reasons on the chart (guru/hud.py): numbered flags with a place on the chart, a failing row in the list for
+    each, the news on the clock, the scenario path, and a sensible block when there is no plan at all."""
+    import guru_analyst as ga
+    import hud as hm
+    signup(c, "hud@example.com")
+    seen_news = False
+    for sym, tf in (("EURUSD", "15m"), ("BTCUSDT", "1h"), ("ETHUSDT", "4h"), ("SOLUSDT", "15m")):
+        a = c.post("/api/analysis/run", json=dict(symbol=sym, tf=tf), headers=H).json()
+        h = a["hud"]
+        check("error" not in h and h["state"] in ("wait", "go", "dont") and h["title"] and h["summary"], h)
+        check(h["state"] != "go" or a["verdict"]["trade"], (h["state"], a["verdict"]))
+        flags = [f for f in h["flags"] if f["n"]]
+        check([f["n"] for f in flags] == list(range(1, len(flags) + 1)) and len(flags) <= hm.MAX_FLAGS, flags)
+        for f in h["flags"]:
+            check(f["tone"] in ("wait", "bad", "good", "info") and f["title"] and f["text"], f)
+            if f["kind"] == "level":
+                check(isinstance(f["price"], float), f)
+            if f["kind"] == "time":
+                check(isinstance(f["t"], int), f)
+            if f.get("t") is not None:
+                check(abs(f["t"] - h["last_t"]) < 400 * h["step"] + 2 * 86400, (f, h["last_t"]))
+        for f in flags:
+            check(any(r["key"] == f["key"] and not r["ok"] for r in h["checks"]), (f["key"], h["checks"]))
+        check(h["met"] == sum(r["ok"] for r in h["checks"]) and h["total"] == len(h["checks"]), h)
+        check(all(s["n"] in {f["n"] for f in flags} for s in h["steps"]), h["steps"])
+        if h["path"]:
+            check(h["path"][0]["t"] == h["last_t"] and all(b["t"] > a_["t"] for a_, b in zip(h["path"], h["path"][1:])), h["path"])
+            check(any(q["mark"] == "entry" for q in h["path"]), h["path"])
+        news = [f for f in h["flags"] if f["key"] == "news"]
+        if a["news"]["risk"] == "high":
+            seen_news = True
+            check(len(news) == 1 and news[0]["tone"] == "bad" and "CPI" in news[0]["title"], news)
+            again = hm.with_news(json.loads(json.dumps(h)), a["news"])
+            check(sum(f["key"] == "news" for f in again["flags"]) == 1, "news added once")
+    check(seen_news, "the fake calendar has a high-impact release")
+    # no plan at all: Don't trade, with context flags and no path
+    X = next(iter(ga._STATE["ctx"].values()))
+    d = hm.build(X, None, dict(headline="No valid plan: wait for a break of structure."), None)
+    check(d["state"] == "dont" and d["title"] == "Don't trade" and d["path"] is None and d["summary"].startswith("No valid"), d)
+    d = hm.with_news(d, dict(events=[dict(title="CPI", country="USD", time="2026-10-22T15:30:00Z", impact="High",
+                                          minutes_until=40)]))
+    check([f["key"] for f in d["flags"]].count("news") == 1 and d["state"] == "dont", d["flags"])
+    # a broken input never breaks the analysis
+    check("error" in hm.build(dict(), dict(dir=1), {}, None), "build guards itself")
+
+
 def main():
     t0 = time.time()
     with client() as c:
@@ -1592,7 +1639,7 @@ def main():
         run("t_admin_accounts", t_admin_accounts, client())
         run("t_security", t_security, client())
         for t in (t_terms_and_site, t_stage2, t_practice, t_strategy, t_scalp_template, t_tracker_rules, t_track_record, t_alerts, t_push, t_replay,
-                  t_learning_export, t_strategies, t_strategy_engine, t_heads, t_my_analyses, t_class_live, t_ideas, t_replay_gate):
+                  t_learning_export, t_strategies, t_strategy_engine, t_heads, t_hud, t_my_analyses, t_class_live, t_ideas, t_replay_gate):
             run(t.__name__, t, client())
     bad = [r for r in RESULTS if not r[1]]
     print(f"\n{len(RESULTS) - len(bad)}/{len(RESULTS)} passed in {time.time() - t0:.0f}s")

@@ -20,6 +20,7 @@ import pandas as pd
 
 import guru_levels as gl
 import guru_model as gm
+import hud
 import liquidity_head as lh
 import market_data as md
 import playbook as pb
@@ -509,69 +510,70 @@ def evaluate_plan(p, X, brain):
     # confluence checklist
     chk = []
 
-    def add(ok, text, w, bad=0.0):
-        chk.append(dict(ok=bool(ok), text=text, w=w if ok else bad))
+    def add(ok, text, w, bad=0.0, key=None):
+        chk.append(dict(ok=bool(ok), text=text, w=w if ok else bad, key=key))
 
     for k, (h, w, bad) in enumerate(zip(X["ladder"][:2], (1.5, 1.0), (-1.0, -0.5))):
         hs = X["htf"].get(h)
         if hs is None:
             continue
         add(hs["trend"] == d, f"{h} trend {'agrees' if hs['trend'] == d else 'is ' + hs['trend_word']}", w,
-            bad if hs["trend"] == -d else 0.0)
-    add(X["trend"] == d, f"{X['tf']} structure {'agrees' if X['trend'] == d else 'does not agree'}", 1.0)
+            bad if hs["trend"] == -d else 0.0, key="htf")
+    add(X["trend"] == d, f"{X['tf']} structure {'agrees' if X['trend'] == d else 'does not agree'}", 1.0, key="structure")
     dr = X["dr"]
     if dr is not None:
         good = (entry <= dr["eq"]) if d == 1 else (entry >= dr["eq"])
         add(good, f"entry in {'discount' if d == 1 else 'premium'} (below/above 50% of the range)" if good else
-            f"entry in {'premium' if d == 1 else 'discount'}: buying high / selling low in the range", 1.0)
+            f"entry in {'premium' if d == 1 else 'discount'}: buying high / selling low in the range", 1.0, key="range")
     near = [c for c in X["clusters"] if c["lo"] - 0.3 * atr <= entry <= c["hi"] + 0.3 * atr]
     if p["type"] == "stop":
         room = [c for c in X["clusters"] if d * (c["price"] - entry) > 0.1 * atr and d * c.get("polarity", 0) < 0
                 and abs(c["price"] - entry) < abs(entry - sl)]
         add(not room, "room to run after the breakout (no opposing level within 1R)" if not room else
-            f"opposing level only {abs(room[0]['price'] - entry) / atr:.1f} ATR past the trigger", 1.0, -0.5)
+            f"opposing level only {abs(room[0]['price'] - entry) / atr:.1f} ATR past the trigger", 1.0, -0.5, key="room")
     else:
         good = sorted({lab for c in near for lab in c["labels"] if polarity(lab) in (0, d)} -
                       {"round number", "daily open", "weekly open", "monthly open"})[:4]
         bad = sorted({lab for c in near for lab in c["labels"] if polarity(lab) == -d})[:2]
         if good and not bad:
-            add(True, "entry at a key level: " + ", ".join(good), 1.5 if len(good) >= 2 else 1.0)
+            add(True, "entry at a key level: " + ", ".join(good), 1.5 if len(good) >= 2 else 1.0, key="level")
         elif bad:
             add(False, f"entry is into {'supply / resistance' if d == 1 else 'demand / support'}: " + ", ".join(bad),
-                0.0, -0.5)
+                0.0, -0.5, key="level")
         else:
-            add(False, "entry not at a key level", 0.0)
+            add(False, "entry not at a key level", 0.0, key="level")
     sw = [s for s in X["A"]["sweeps"] if s["side"] == ("sell-side" if d == 1 else "buy-side")
           and len(X["df"]) - 1 - s["idx"] <= 30]
     add(bool(sw), f"{'sell' if d == 1 else 'buy'}-side liquidity swept recently (stop hunt done)" if sw else
-        "no recent liquidity sweep in your favour", 1.0)
+        "no recent liquidity sweep in your favour", 1.0, key="sweep")
     tgt_liq = any("liquidity" in lab.lower() or "equal" in lab.lower() or lab.startswith(("PDH", "PDL", "PWH", "PWL"))
                   for lab in p["tp_labels"][:2])
-    add(tgt_liq, "target is resting liquidity (draw on liquidity)" if tgt_liq else "target isn't a liquidity pool", 0.5)
+    add(tgt_liq, "target is resting liquidity (draw on liquidity)" if tgt_liq else "target isn't a liquidity pool", 0.5,
+        key="target")
     rsi = X["rsi"]
     mom_ok = (40 <= rsi <= 72) if d == 1 else (28 <= rsi <= 60)
     divs = [v for v in X["divs"] if v["bias"] == d]
     add(mom_ok or bool(divs), f"momentum fits (RSI {rsi:.0f}{', ' + divs[0]['name'].lower() if divs else ''})"
-        if (mom_ok or divs) else f"RSI {rsi:.0f} is stretched {'up' if d == 1 else 'down'}", 0.5)
+        if (mom_ok or divs) else f"RSI {rsi:.0f} is stretched {'up' if d == 1 else 'down'}", 0.5, key="momentum")
     pats = [q for q in X["patterns"] if q.get("bias_now") == d]
     if pats:
-        add(True, f"pattern agrees: {pats[0]['name'].lower()}", 0.5)
+        add(True, f"pattern agrees: {pats[0]['name'].lower()}", 0.5, key="pattern")
     if X["intraday"] and X["asset_class"] != "crypto":
         s = X["session"]
         ok = bool([k for k in s.get("active", []) if "killzone" in k or "New York" in k]) or (
             s.get("minutes_to_next") is not None and s["minutes_to_next"] <= 60)
         add(ok, "inside / just before a London or New York killzone" if ok else
-            f"outside the killzones (next: {s.get('next_killzone')} in {s.get('minutes_to_next')} min)", 0.5)
+            f"outside the killzones (next: {s.get('next_killzone')} in {s.get('minutes_to_next')} min)", 0.5, key="session")
     rr2 = p["rr"][1] if len(p["rr"]) > 1 else p["rr"][0]
-    add(rr2 >= 2.5, f"reward:risk {rr2:.1f} to TP2" + (" ≥ 2.5" if rr2 >= 2.5 else ""), 0.5)
+    add(rr2 >= 2.5, f"reward:risk {rr2:.1f} to TP2" + (" ≥ 2.5" if rr2 >= 2.5 else ""), 0.5, key="rr")
     first = p["tps"][0]
     block = [c for c in X["clusters"] if c["strength"] >= 2.5 and d * (c["price"] - entry) > 0.1 * atr
              and d * (first - c["price"]) > 0.6 * abs(first - entry)]
     add(not block, "clear path to TP1" if not block else f"strong level in the way at {X['f'].p(block[0]['price'])}",
-        0.5, -0.5)
+        0.5, -0.5, key="path")
     add(cost_r <= 0.10, f"costs {pct(cost_r)} of the risk" + (" (fine)" if cost_r <= 0.10 else
                                                              " (too high for this timeframe)"), 0.5,
-        -1.0 if cost_r > 0.25 else 0.0)
+        -1.0 if cost_r > 0.25 else 0.0, key="costs")
     score = float(sum(c["w"] for c in chk))
     grade = "A+" if score >= 8 else "A" if score >= 6.5 else "B" if score >= 5 else "C" if score >= 3.5 else "D"
     ny = X["df"].index[-1].tz_convert("America/New_York")
@@ -925,6 +927,7 @@ def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_draw
     X["fixed_time"] = _safe(lambda: pb.fixed_time(X, X["chosen"]), None, notes, "fixed-time view")
     X["verdict"] = pb.soften(_verdict(primary, X), primary, X, pb.confidence(primary, X), X["conflict"])
     X["liq_map"] = _safe(lambda: pb.liquidity_map(X), None, notes, "liquidity map")
+    X["hud"] = hud.build(X, primary, X["verdict"], now)
     X["skill"] = model_skill(brain)
     X["notes"] = notes
     result = dict(
@@ -943,7 +946,7 @@ def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_draw
         divergences=X["divs"], session=X["session"], period_levels=X["period"], rsi=X["rsi"],
         probabilities=X["prob"], model=X["skill"], user_drawings=X["user"], notes=notes,
         strategies=_strategies_block(X), mtf=X["mtf"], fixed_time=X["fixed_time"], liquidity=X["liq_map"],
-        how_to_enter=pb.how_to_enter(primary, X), layers_scope=st.layers_for(X["chosen"]) if X["chosen"] else None,
+        how_to_enter=pb.how_to_enter(primary, X), hud=X["hud"], layers_scope=st.layers_for(X["chosen"]) if X["chosen"] else None,
         disclaimer="Research tool, not financial advice. Probabilities are calibrated estimates from history; "
                    "markets change. Analysis may differ on other timeframes and changes with every new candle. "
                    "Paper-trade first and never risk money you can't afford to lose.")

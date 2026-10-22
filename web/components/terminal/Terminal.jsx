@@ -33,6 +33,7 @@ import Toolbox from "./Toolbox";
 import IntervalSheet, { IntervalChip } from "./IntervalSheet";
 import IndicatorSheet from "./IndicatorSheet";
 import { ExplainCard, FromHereChip, WhatIfSheet } from "./ChartNotes";
+import ChartHud, { hudOf } from "./ChartHud";
 
 const COMPARE_COLORS = ["#f5a524", "#b78bff", "#3fb8ff", "#ff6bcb"];
 const LAYOUT_KEYS = ["volume", "rsi", "logScale", "grid", "killzones", "watermark"];
@@ -273,6 +274,16 @@ export default function Terminal() {
   useEffect(() => {
     if (eng.current) eng.current.setShowAlt(showAlt);
   }, [engReady, showAlt]);
+  // the reasons on the chart (glass HUD): while they show, the chart keeps only the essential analysis drawings and a
+  // plan that isn't active yet is drawn faint
+  const hudOn = settings.analysis.hud !== false;
+  const showHud = !!(res && hudOn && analysisOn && !busy && !replay && !chartState.loading && !chartState.error);
+  useEffect(() => {
+    if (!eng.current) return;
+    const h = showHud ? hudOf(res) : null;
+    eng.current.setDetail(h ? 1 : 2);
+    eng.current.setPlanDim(!!(h && h.state !== "go"));
+  }, [engReady, showHud, res]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (eng.current) eng.current.setDrawingsVisible(drawVisible);
   }, [engReady, drawVisible]);
@@ -546,7 +557,11 @@ export default function Terminal() {
       if (d.view && d.candles && d.candles.length && atf === tf) {
         const from = d.candles[Math.max(0, Math.min(d.candles.length - 1, d.view.x_from))][0];
         const last = d.candles[d.candles.length - 1][0];
-        eng.current.panTo(from, last + ((d.meta && d.meta.tf_seconds) || 3600) * 30);
+        const stp = (d.meta && d.meta.tf_seconds) || 3600;
+        // with the reasons on the chart, the view ends in the future: that's where the scenario, the entry and the
+        // news on the clock are drawn
+        if (settings.analysis.hud !== false) eng.current.fitTimes(last - (mobile ? 46 : 110) * stp, last + (mobile ? 16 : 30) * stp);
+        else eng.current.panTo(from, last + stp * 30);
       }
       if (narrow && !mobile) setPanelOpen(true);
       refresh();
@@ -1104,6 +1119,9 @@ export default function Terminal() {
             keep={keepDrawing} setKeep={setKeepDrawing} locked={lockedAll} setLocked={toggleLockAll} visible={drawVisible} setVisible={setDrawVisible}
             onUndo={() => eng.current && eng.current.undo()} onRedo={() => eng.current && eng.current.redo()} onClear={clearAll} hidden={mobile && !drawMobile} />
           <FromHereChip hover={replay ? null : hover} decimals={dec} onPick={runWhatIf} />
+          <ChartHud eng={engReady ? eng.current : null} res={showHud ? res : null} mobile={mobile} dec={dec} showLevels={showLevels} stale={stale}
+            bottomInset={drawMobile ? 66 : 28} onHide={() => updateSettings({ analysis: { hud: false } })} onOpen={() => openTab("analysis")} onAnalyse={analyse}
+            onAlert={(a) => requestAlert({ symbol, tf, price: Number(Number(a.price).toFixed(dec)), op: a.op, note: a.note })} />
           {busy ? (
             <>
               <div className="scanline" />
@@ -1132,7 +1150,7 @@ export default function Terminal() {
               </div>
             </div>
           ) : null}
-          {mobile && res && !panelOpen && !busy ? (
+          {mobile && res && !panelOpen && !busy && !showHud ? (
             <button className={`verdict-pill ${vTone}`} onClick={() => openTab("analysis")} style={{ bottom: drawMobile ? 70 : 34 }}>
               <div className="grow">
                 <b>{showLevels ? res.verdict.action : res.verdict.side === "long" ? "Leaning up" : res.verdict.side === "short" ? "Leaning down" : "No clear edge"}</b>

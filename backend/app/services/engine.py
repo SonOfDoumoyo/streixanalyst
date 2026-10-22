@@ -18,6 +18,7 @@ if str(GURU_DIR) not in sys.path:
 import market_data as md            # noqa: E402
 import guru_model as gm             # noqa: E402
 import guru_analyst as ga           # noqa: E402
+import hud as hudm                   # noqa: E402
 import divergence as dvg            # noqa: E402
 import playbook as pb               # noqa: E402
 import strategies as st             # noqa: E402
@@ -289,6 +290,8 @@ def _attach_news(res, spec, tf):
     except Exception as e:
         nw = dict(risk="unknown", note=f"News unavailable ({str(e)[:60]}).", events=[], headlines=[])
     res["news"] = nw
+    if res.get("hud"):
+        res["hud"] = hudm.with_news(res["hud"], nw)
     vd = res.get("verdict") or {}
     if nw.get("risk") == "high":
         vd["news_warning"] = nw["note"]

@@ -141,6 +141,8 @@ export class ChartEngine {
     this.mainH = 0;
     this.plotW = 0;
     this.drawingsVisible = true;
+    this.planDim = false;          // the analyst's plan drawn faint: a conditional plan, not active yet
+    this.frameHooks = new Set();   // called after every frame (the glass HUD follows the chart with them)
     this._dirty = true;
     this._alive = true;
     this._lastTap = 0;
@@ -605,6 +607,19 @@ export class ChartEngine {
   setAnalysisVisible(on) {
     this.anaHidden = !on;
     this.dirty();
+  }
+
+  /** Draw the plan faint (a conditional plan that isn't active yet) or at full strength. */
+  setPlanDim(b) {
+    this.planDim = !!b;
+    this.dirty();
+  }
+
+  /** Call fn(engine) after every frame drawn; returns the function that stops it. */
+  onFrame(fn) {
+    this.frameHooks.add(fn);
+    this.dirty();
+    return () => this.frameHooks.delete(fn);
   }
 
   clearAnalysis() {
@@ -1712,6 +1727,11 @@ export class ChartEngine {
     this._drawPanes(i0, i1);
     this._drawPriceAxis(priceTicks);
     this._drawTimeAxis(timeTicks);
+    for (const fn of this.frameHooks) {
+      try {
+        fn(this);
+      } catch { /* a listener never breaks the chart */ }
+    }
   }
 
   _priceTicks() {
@@ -2529,7 +2549,7 @@ export class ChartEngine {
       if ((pass === "below") !== below) continue;
       const pr = own ? this._prog(it) : 1;
       if (pr <= 0) continue;
-      ctx.globalAlpha = pr;
+      ctx.globalAlpha = own && this.planDim && it.layer === "plan" ? pr * 0.4 : pr;
       const k = it.kind;
       if (k === "box") {
         const x1 = this.tx(it.t1);

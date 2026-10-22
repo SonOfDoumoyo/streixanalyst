@@ -7,6 +7,7 @@ import { fmtDateTime, fmtMoney, fmtPct, fmtPrice, fmtQty, minutesHuman, TF_LABEL
 import { gradeClass, LAYERS, verdictTone } from "@/lib/analysis";
 import DirectionBar from "@/components/DirectionBar";
 import PlanLadder from "@/components/terminal/PlanLadder";
+import { hudOf } from "@/components/terminal/ChartHud";
 
 function Prob({ p, be, label }) {
   if (p === null || p === undefined) return null;
@@ -394,6 +395,58 @@ function Liquidity({ liq, dec }) {
   );
 }
 
+/** The reasons the chart shows (the glass HUD), in the panel: the switch, what has to happen first, what is against
+ *  the idea and what is already in place, and an alert on the first level that has to happen. */
+function HudReasons({ res, dec, symbol, tf }) {
+  const { settings, updateSettings } = useAuth();
+  const hud = hudOf(res);
+  if (!hud) return null;
+  const on = settings.analysis.hud !== false;
+  const flags = (hud.flags || []).filter((f) => f.n);
+  const steps = hud.steps || [];
+  const toneOf = (n) => (flags.find((f) => f.n === n) || {}).tone || "wait";
+  const against = flags.filter((f) => !f.need);
+  const good = (hud.flags || []).filter((f) => f.tone === "good");
+  const lvl = flags.find((f) => f.need && Number.isFinite(f.price));
+  const cap = (x) => (x ? x[0].toUpperCase() + x.slice(1) : x);
+  return (
+    <div className="card hud-panel">
+      <label className="row ap-toggle">
+        <span className="grow"><b>Show the reasons on the chart</b><small>Numbered flags on the levels, the scenario and every check</small></span>
+        <button className={`switch-ui${on ? " on" : ""}`} aria-pressed={on} onClick={() => updateSettings({ analysis: { hud: !on } })} />
+      </label>
+      {steps.length ? (
+        <>
+          <div className="hp-sub">{hud.state === "go" ? "Before you enter" : "What has to happen first"}</div>
+          <ol className="hp-list">
+            {steps.map((s0) => <li key={s0.n}><i className={`hud-n ${toneOf(s0.n)}`}>{s0.n}</i><span>{cap(s0.text)}</span></li>)}
+          </ol>
+        </>
+      ) : null}
+      {against.length ? (
+        <>
+          <div className="hp-sub">{hud.state === "dont" ? "On the chart" : steps.length ? "Also against it" : "Why there's no entry"}</div>
+          <ul className="hp-list">
+            {against.map((f) => <li key={f.n}><i className={`hud-n ${f.tone}`}>{f.n}</i><span><b>{f.title}.</b> <span className="muted">{f.text}</span></span></li>)}
+          </ul>
+        </>
+      ) : null}
+      {good.length ? (
+        <>
+          <div className="hp-sub">Already in place</div>
+          <ul className="hp-list">{good.map((f) => <li key={f.key} className="good"><span className="ok">✓</span><span>{f.title}</span></li>)}</ul>
+        </>
+      ) : null}
+      {lvl && symbol ? (
+        <button className="btn sm primary block" style={{ marginTop: 12 }}
+          onClick={() => requestAlert({ symbol, tf, price: Number(Number(lvl.price).toFixed(dec)), op: lvl.price > res.price ? "above" : "below", note: lvl.title })}>
+          <Icon name="bell" size={14} /> Alert me when {fmtPrice(lvl.price, dec)} is {lvl.key === "structure" ? "broken" : "reached"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk, onClean, onUpgrade, hiddenLayers, toggleLayer, layers, showAlt, setShowAlt, stale, symbolLabel, tf, symbol, onEditPlan, onStrategies }) {
   const { settings, updateSettings, can, user, toast } = useAuth();
   const showLevels = settings.analysis.showLevels !== false;
@@ -482,6 +535,7 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
         </div>
       </div>
 
+      <HudReasons res={res} dec={dec} symbol={symbol} tf={tf} />
       {res.fixed_time ? <FixedTime ft={res.fixed_time} /> : null}
       {showLevels && res.plan ? (
         <LevelsCard p={res.plan} dec={dec} symbol={res.symbol} tf={res.tf} toast={toast} title={v.trade ? "The plan" : "If conditions improve"}
