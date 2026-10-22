@@ -156,7 +156,7 @@ export function aiToDrawings(res, theme = {}, hidden = null) {
     const step = (res.meta && res.meta.tf_seconds) || 3600;
     out.push({ id: did(), type: plan.side === "short" ? "short" : "long",
       points: [{ t: last + step, p: plan.entry }, { t: last + step * 25, p: plan.sl }, { t: last + step * 25, p: plan.tps[Math.min(1, plan.tps.length - 1)] }],
-      style: { color: "#e8a33d", width: 2, dash: "solid", fromAi: true } });
+      style: { color: "#2962ff", width: 2, dash: "solid", fromAi: true } });
   }
   return out;
 }

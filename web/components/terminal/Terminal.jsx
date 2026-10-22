@@ -475,7 +475,7 @@ export default function Terminal() {
     const e = eng.current;
     setCrossMenu(null);
     if (!e) return;
-    const def = e.drawingDefaults || { color: "#4ea4ff", width: 2, dash: "solid" };
+    const def = e.drawingDefaults || { color: "#2962ff", width: 2, dash: "solid" };
     e.select(e.addDrawing({ type, points: [{ t: at.time, p: at.price }], style: { ...def } }));
   };
   const alertForm = (at, op) => {

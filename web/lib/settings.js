@@ -35,7 +35,7 @@ export const DEFAULT_SETTINGS = {
   keepScreenOn: false,       // stop the phone dimming while the chart is open
   rememberChart: true,       // reopen the last market and timeframe
   layers: {},
-  drawingDefaults: { color: "#4ea4ff", width: 2, dash: "solid" },
+  drawingDefaults: { color: "#2962ff", width: 2, dash: "solid" },
   chartFavorites: [],        // chart types starred with a long tap in the Chart type sheet
   chartTypeTipSeen: false,
   layouts: [],               // saved chart layouts (market, timeframe, chart type, indicators, panes, compared markets)

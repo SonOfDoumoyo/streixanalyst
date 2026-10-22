@@ -22,12 +22,12 @@ function SweepArt() {
       <rect x="145" y="60" width="10" height="12" fill="#f04f6a" rx="1" />
       <line x1="172" y1="50" x2="172" y2="100" stroke="#19c98f" strokeWidth="1.4" />
       <rect x="167" y="54" width="10" height="20" fill="#19c98f" rx="1" />
-      <circle cx="161" cy="101" r="9" fill="none" stroke="#e8a33d" strokeWidth="1.4" />
-      <text x="128" y="117" fill="#e8a33d" fontSize="9">the sweep</text>
+      <circle cx="161" cy="101" r="9" fill="none" stroke="#5d8bff" strokeWidth="1.4" />
+      <text x="128" y="117" fill="#5d8bff" fontSize="9">the sweep</text>
       <line x1="140" y1="110" x2="292" y2="110" stroke="#f04f6a" strokeWidth="1.4" />
       <text x="200" y="106" fill="#f04f6a" fontSize="9">your stop goes past it</text>
-      <line x1="186" y1="56" x2="292" y2="56" stroke="#e8a33d" strokeWidth="1.4" />
-      <text x="190" y="70" fill="#e8a33d" fontSize="9">enter on the close back</text>
+      <line x1="186" y1="56" x2="292" y2="56" stroke="#5d8bff" strokeWidth="1.4" />
+      <text x="190" y="70" fill="#5d8bff" fontSize="9">enter on the close back</text>
       {[[196, 40, 60, 56, 44], [216, 28, 48, 44, 32], [236, 16, 36, 32, 20]].map(([x, h, l, o, c], k) => (
         <g key={k}>
           <line x1={x} y1={h} x2={x} y2={l} stroke="#19c98f" strokeWidth="1.4" />
@@ -50,10 +50,10 @@ function HoldArt() {
       ))}
       <line x1="170" y1="4" x2="170" y2="106" stroke="#a9a69f" strokeDasharray="3 3" />
       <line x1="8" y1="34" x2="292" y2="34" stroke="#a9a69f" strokeDasharray="3 3" />
-      <rect x="186" y="18" width="104" height="22" rx="11" fill="#e8a33d" />
-      <text x="196" y="33" fill="#1b1306" fontSize="10" fontWeight="700">Analyse from here</text>
-      <circle cx="170" cy="70" r="13" fill="rgba(232,163,61,0.18)" stroke="#e8a33d" />
-      <circle cx="170" cy="70" r="4" fill="#e8a33d" />
+      <rect x="186" y="18" width="104" height="22" rx="11" fill="#2962ff" />
+      <text x="196" y="33" fill="#ffffff" fontSize="10" fontWeight="700">Analyse from here</text>
+      <circle cx="170" cy="70" r="13" fill="rgba(41,98,255,0.2)" stroke="#5d8bff" />
+      <circle cx="170" cy="70" r="4" fill="#5d8bff" />
       <text x="188" y="80" fill="#a9a69f" fontSize="9">hold the newest candle</text>
     </svg>
   );

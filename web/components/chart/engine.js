@@ -32,7 +32,7 @@ const FIB_COL = ["#9aa7bd","#ff4d5e", "#ffa726", "#3ddc84", "#12d9a0", "#2fb5d6"
 const DEFAULT_THEME = {
   bg: "#000000", grid: "rgba(42,46,57,0.85)", text: "#9a9fac", crosshair: "#758696",
   up: "#00e6a0", down: "#ff2d55", wickUp: "#00e6a0", wickDown: "#ff2d55", borderUp: "#00e6a0", borderDown: "#ff2d55",
-  line: "#e8a33d", axisLine: "#23262d", font: "-apple-system, BlinkMacSystemFont, \"Trebuchet MS\", Roboto, Ubuntu, sans-serif",
+  line: "#2962ff", axisLine: "#2a2e39", font: "-apple-system, BlinkMacSystemFont, \"Trebuchet MS\", Roboto, Ubuntu, sans-serif",
   label: "#2a3a5c", ma20: "#3fb8ff", ma50: "#ffb020", ma200: "#b78bff",
 };
 // grid is off by default (premium look); the user turns it on from the chart menu
