@@ -3,6 +3,8 @@
 const backend = (process.env.BACKEND_URL || "http://localhost:8000").replace(/\/$/, "");
 
 const nextConfig = {
+  // the Docker image (deploy/oracle) builds a small standalone server; Vercel, Netlify and `next start` don't need it
+  output: process.env.BUILD_STANDALONE === "1" ? "standalone" : undefined,
   reactStrictMode: true,
   poweredByHeader: false,
   // what the browser gets is minified code without source maps or debug logging: the page's structure can't be hidden

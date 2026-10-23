@@ -1,0 +1,14 @@
+# One address for everything. Caddy gets and renews the HTTPS certificate by itself.
+{$DOMAIN} {
+	# the API (charts, analysis, StreixAI streaming, alerts ...). flush_interval -1 keeps streamed answers flowing.
+	handle /api/* {
+		reverse_proxy api:8000 {
+			flush_interval -1
+		}
+	}
+	# the website
+	handle {
+		encode zstd gzip
+		reverse_proxy web:3000
+	}
+}

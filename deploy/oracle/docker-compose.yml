@@ -1,0 +1,74 @@
+# StreixAnalyst on one Oracle Cloud VM: Postgres + API + web app + Caddy (automatic HTTPS), all in Docker.
+# Run from this folder:  docker compose up -d --build        (see README.md for the full walk-through)
+name: streix
+
+services:
+  db:
+    image: postgres:18-alpine            # the same major version as Render's database, so its backup restores cleanly
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: streix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (run ./init-env.sh)}
+      POSTGRES_DB: streix
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U streix -d streix"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: ../../backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      ENV: production
+      DATABASE_URL: postgresql://streix:${POSTGRES_PASSWORD}@db:5432/streix
+      DATA_DIR: /var/data
+      GURU_BRAIN_PATH: /var/data/models/guru_brain.joblib      # an uploaded brain lives on the volume; the bundled one is the fallback
+      FRONTEND_URL: https://${DOMAIN:?set DOMAIN in .env}
+      ENABLE_BACKGROUND: "1"            # alerts, strategy watches, the tracker and self-learning run inside the API
+    volumes:
+      - apidata:/var/data
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=4)"]
+      interval: 30s
+      timeout: 6s
+      retries: 5
+      start_period: 60s
+
+  web:
+    build:
+      context: ../../web
+      args:
+        BACKEND_URL: http://api:8000
+    restart: unless-stopped
+    depends_on:
+      - api
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+      - api
+
+volumes:
+  pgdata:
+  apidata:
+  caddy_data:
+  caddy_config:

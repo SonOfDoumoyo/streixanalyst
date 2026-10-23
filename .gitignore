@@ -1,0 +1,4 @@
+
+# Oracle deploy secrets and backups
+deploy/oracle/.env
+deploy/oracle/backups/
