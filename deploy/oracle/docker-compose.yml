@@ -32,7 +32,7 @@ services:
       FRONTEND_URL: https://${DOMAIN:?set DOMAIN in ../../backend/streixanalyst-api.env}
       ENABLE_BACKGROUND: "1"            # alerts, strategy watches, the tracker and self-learning run inside the API
     ports:
-      -"8000:8000"
+      - "8000:8000"
     volumes:
       - apidata:/var/data
     depends_on:
