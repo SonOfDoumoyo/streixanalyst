@@ -140,6 +140,9 @@ class Settings:
 
         self.cryptopanic_token = env("CRYPTOPANIC_TOKEN")
         self.enable_background = env_bool("ENABLE_BACKGROUND", True)
+        # a long random string. A free scheduler (GitHub Actions, Cloud Scheduler, cron-job.org) that calls
+        # POST /api/watches/cron with it keeps strategy watches scanning on a host that sleeps when idle.
+        self.cron_secret = env("CRON_SECRET")
 
         # Phone alerts (Web push). Create the keys once (see .env.example), then set all three. Off until then.
         self.vapid_public_key = env("VAPID_PUBLIC_KEY")

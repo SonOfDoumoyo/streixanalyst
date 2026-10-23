@@ -10,6 +10,7 @@ import { Menu, Modal } from "@/components/ui";
 import Paywall from "@/components/Paywall";
 import AlertsBell, { requestAlert } from "@/components/AlertsBell";
 import StrategyPicker from "@/components/StrategyPicker";
+import WatchSheet from "@/components/terminal/WatchSheet";
 import { ApiError, del, get, post, put, qs } from "@/lib/api";
 import { aiToDrawings, ANALYSIS_STEPS, gradeClass, toOverlay, toUserDrawings, verdictTone } from "@/lib/analysis";
 import { ALL_TFS, analysisTf, cleanSymbol, fmtChange, fmtPrice, initials, TF_LABEL, TFS } from "@/lib/format";
@@ -172,6 +173,7 @@ export default function Terminal() {
   const [drawList, setDrawList] = useState([]);
   const [analysisOn, setAnalysisOn] = useState(true);
   const [picker, setPicker] = useState(false);
+  const [watchOpen, setWatchOpen] = useState(false);
   const [explain, setExplain] = useState(null);
   const [whatIf, setWhatIf] = useState({ open: false, busy: false, data: null, error: null });
   const [stratOverlay, setStratOverlay] = useState(null);
@@ -1033,6 +1035,7 @@ export default function Terminal() {
         {!mobile ? (
           <>
             <Link className="btn sm ghost" href="/desk" title="My analysis" data-tour="desk"><Icon name="book" size={15} /> My analysis</Link>
+            <button className="btn sm ghost" onClick={() => setWatchOpen(true)} title="Get alerted when your strategies find a setup"><Icon name="eye" size={15} /> Watch</button>
             <button className={`btn primary analyse-btn ${busy ? "busy" : ""}`} data-tour="analyse" onClick={analyse} disabled={busy || !!chartState.error} title="Analyse this chart (A)">
               {busy ? <span className="spinner" /> : <Icon name="zap" size={17} />}
               <span>{busy ? "Analysing" : "Analyse"}</span>
@@ -1061,6 +1064,7 @@ export default function Terminal() {
             <Link href="/track-record"><Icon name="shield" size={16} /> Track record</Link>
             {isStudent ? <Link href="/class"><Icon name="users" size={16} /> Watch my teacher</Link> : null}
             <hr />
+            <button onClick={() => { setMenu(null); setWatchOpen(true); }}><Icon name="eye" size={16} /> Watch for setups</button>
             <button onClick={() => { setMenu(null); setPicker(true); }}><Icon name="target" size={16} /> My strategies</button>
             <Link href="/settings"><Icon name="settings" size={16} /> Settings</Link>
             <Link href="/billing"><Icon name="card" size={16} /> Plan & billing</Link>
@@ -1202,6 +1206,8 @@ export default function Terminal() {
       <ExplainCard data={explain} onClose={() => setExplain(null)} onCopy={(t, w) => { copyText(t, w); setExplain(null); }} onAsk={ask} />
       <WhatIfSheet open={whatIf.open} onClose={() => setWhatIf({ open: false, busy: false, data: null, error: null })} data={whatIf.data} busy={whatIf.busy} error={whatIf.error}
         onUse={(s) => { placeTrade({ side: s.side, entry: s.entry, sl: s.sl, tp: s.tps[Math.min(1, s.tps.length - 1)] }); setWhatIf({ open: false, busy: false, data: null, error: null }); }} />
+      <WatchSheet open={watchOpen} onClose={() => setWatchOpen(false)} symbol={symbol} tf={analysisTf(tf)}
+        onLimit={(e) => setPaywall({ message: e.message, detail: e.detail })} />
       <StrategyPicker open={picker} onClose={() => setPicker(false)} symbol={symbol} tf={analysisTf(tf)} forced={!!(user && user.needs_strategies)}
         onSaved={() => { if (res) toast("Analyse again to use your new strategies.", "info", 3500); }} />
       <Toolbox open={sheet === "toolbox"} onClose={() => setSheet(null)} go={setSheet} act={toolboxAct} symbol={symbol} tf={tf}

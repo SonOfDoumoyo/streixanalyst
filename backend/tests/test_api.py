@@ -1640,6 +1640,114 @@ def t_hud(c):
     check("error" in hm.build(dict(), dict(dir=1), {}, None), "build guards itself")
 
 
+def t_watch(c):
+    """Strategy watches: set one up, the real scanner reads a pair, a new setup is reported once by site notification,
+    email and push, a repeat is not, limits hold, and the cron ping is locked."""
+    from app.models import StrategyWatch, utcnow
+    from app.services import mailer, watcher
+    signup(c, "watch@example.com")
+    ids = ["ict_sweep_mss", "ote_pullback", "ob_retest"]
+    # the real scan runs on the offline candles and returns well-formed setups (or none)
+    res = watcher.scan_pair("BTCUSDT", "15m", [s["id"] for s in st_catalog()])
+    check(res["bar"] and res["decimals"] is not None and isinstance(res["signals"], list), res)
+    for s in res["signals"]:
+        check(s["id"] and s["bar"] and s["dir"] in (1, -1) and s["side"], s)
+        if not s["fixed_time"]:
+            check(s["dir"] * (s["entry"] - s["sl"]) > 0 and s["dir"] * (s["tp"] - s["entry"]) > 0 and s["rr"] > 0, s)
+    # validation
+    check(c.post("/api/watches", json=dict(symbol="BTCUSDT", tf="15m", strategies=["nope"]), headers=H).status_code == 422, "ids")
+    check(c.post("/api/watches", json=dict(symbol="BTCUSDT", tf="2m", strategies=ids), headers=H).status_code == 422, "tf")
+    # a fake scan makes the alert flow deterministic
+    bar = [int(time.time()) - 4 * 3600]                       # the newest closed candle, a few hours ago
+    live = dict(id="ict_sweep_mss", name="Liquidity sweep + structure shift", dir=1, side="long", kind="market", age=0,
+                fixed_time=False, entry=100.0, sl=95.0, tp=112.5, rr=2.5, chase=False)
+
+    def fake(sym, tf, want, sigs=None):
+        sg = [dict(live, bar=bar[0])] if sigs is None else sigs
+        return dict(symbol=sym, tf=tf, bar=bar[0], decimals=2, price=100.0, signals=[x for x in sg if x["id"] in want])
+
+    old = watcher.scan_pair
+    watcher.scan_pair = lambda sym, tf, want: fake(sym, tf, want)
+    sent = []
+    old_send = mailer.send
+    mailer.send = lambda to, subject, text, html=None: sent.append((to, subject, text, html)) or True
+    try:
+        r = c.post("/api/watches", json=dict(symbol="btcusdt", tf="15m", strategies=ids, email=True, push=False), headers=H)
+        check(r.status_code == 200, r.text)
+        j = r.json()
+        wid = j["watch"]["id"]
+        check(j["watch"]["symbol"] == "BTCUSDT" and len(j["live"]) == 1 and j["live"][0]["side"] == "long", j)
+        check(c.get("/api/alerts/notifications").json()["unread"] == 0, "what was live when created isn't announced")
+        db = _db()
+        now = utcnow()
+        check(watcher.run_once(now=now + timedelta(minutes=1))["alerts"] == 0, "same candle: nothing new")
+        bar[0] += 900                                         # a new candle closes with a fresh setup
+        stats = watcher.run_once(now=now + timedelta(minutes=16))
+        check(stats["alerts"] == 1 and stats["pairs"] == 1, stats)
+        check(watcher.run_once(now=now + timedelta(minutes=17))["alerts"] == 0, "reported once")
+        nt = c.get("/api/alerts/notifications").json()
+        n0 = nt["items"][0]
+        check(nt["unread"] == 1 and n0["kind"] == "watch" and "Buy setup on BTCUSDT 15m" in n0["title"], nt)
+        check("Stop loss 95.00" in n0["body"] and "Take profit 112.50" in n0["body"] and "2.5×" in n0["body"], n0["body"])
+        check(n0["link"] == "/terminal?s=BTCUSDT&tf=15m", n0["link"])
+        check(len(sent) == 1 and sent[0][0] == "watch@example.com" and "Open the chart" in sent[0][3], sent)
+        # a different candle, same strategy: reported again; a paused watch: silent
+        bar[0] += 900
+        check(watcher.run_once(now=now + timedelta(minutes=32))["alerts"] == 1, "next signal")
+        check(c.patch(f"/api/watches/{wid}", json=dict(status="paused"), headers=H).json()["status"] == "paused", "pause")
+        bar[0] += 900
+        check(watcher.run_once(now=now + timedelta(minutes=48))["alerts"] == 0, "paused is silent")
+        got = c.get("/api/watches").json()
+        check(got["active"] == 0 and got["items"][0]["fired"] == 2 and got["items"][0]["names"], got)
+        # email off: only the site notification
+        c.patch(f"/api/watches/{wid}", json=dict(status="active", email=False), headers=H)
+        bar[0] += 900
+        before = len(sent)
+        check(watcher.run_once(now=now + timedelta(minutes=64))["alerts"] == 1 and len(sent) == before, "no email when off")
+        # only the chosen strategies count
+        c.patch(f"/api/watches/{wid}", json=dict(strategies=["ote_pullback"]), headers=H)
+        bar[0] += 900
+        check(watcher.run_once(now=now + timedelta(minutes=80))["alerts"] == 0, "other strategies' setups don't alert")
+        # a fixed-time call reads well too
+        t, b = watcher.message(dict(name="FT trend", fixed_time=True, dir=-1, entry=1.2, expiry=3), "EURUSD", "5m", 4)
+        check("DOWN" in t and "Expiry" in b, (t, b))
+        # a pair that fails to load is reported on the watch, and the others carry on
+        def boom(sym, tf, want):
+            raise RuntimeError("exchange down")
+        watcher.scan_pair = boom
+        bar[0] += 900
+        watcher.run_once(now=now + timedelta(minutes=96))
+        db.expire_all()
+        w = db.get(StrategyWatch, wid)
+        check("exchange down" in (w.error or ""), w.error)
+        db.close()
+        # free plan: two watches at most
+        _set_user("watch@example.com", trial_ends_at=utcnow() - timedelta(days=1))
+        watcher.scan_pair = lambda sym, tf, want: fake(sym, tf, want, sigs=[])
+        check(c.post("/api/watches", json=dict(symbol="ETHUSDT", tf="1h", strategies=ids), headers=H).status_code == 200, "2nd")
+        r = c.post("/api/watches", json=dict(symbol="SOLUSDT", tf="1h", strategies=ids), headers=H)
+        check(r.status_code == 429 and r.json()["detail"]["kind"] == "watches", r.text)
+        check(c.delete(f"/api/watches/{wid}", headers=H).status_code == 200, "delete")
+        check(c.post("/api/watches", json=dict(symbol="SOLUSDT", tf="1h", strategies=ids), headers=H).status_code == 200, "room")
+    finally:
+        watcher.scan_pair = old
+        mailer.send = old_send
+    # the cron ping is locked
+    check(c.post("/api/watches/cron").status_code == 403, "no secret")
+    settings.cron_secret = "s3cret-s3cret"
+    try:
+        check(c.post("/api/watches/cron", headers={"X-Cron-Secret": "wrong"}).status_code == 403, "wrong secret")
+        r = c.post("/api/watches/cron", headers={"X-Cron-Secret": "s3cret-s3cret"})
+        check(r.status_code == 200 and "alerts" in r.json(), r.text)
+    finally:
+        settings.cron_secret = None
+
+
+def st_catalog():
+    import strategies as st
+    return [s for s in st.CATALOG if not s["fixed_time"]]
+
+
 def main():
     t0 = time.time()
     with client() as c:
@@ -1671,7 +1779,7 @@ def main():
         run("t_admin_accounts", t_admin_accounts, client())
         run("t_security", t_security, client())
         for t in (t_terms_and_site, t_stage2, t_practice, t_strategy, t_scalp_template, t_tracker_rules, t_track_record, t_alerts, t_push, t_replay,
-                  t_learning_export, t_strategies, t_strategy_engine, t_heads, t_hud, t_my_analyses, t_class_live, t_ideas, t_replay_gate):
+                  t_learning_export, t_strategies, t_strategy_engine, t_heads, t_hud, t_watch, t_my_analyses, t_class_live, t_ideas, t_replay_gate):
             run(t.__name__, t, client())
     bad = [r for r in RESULTS if not r[1]]
     print(f"\n{len(RESULTS) - len(bad)}/{len(RESULTS)} passed in {time.time() - t0:.0f}s")

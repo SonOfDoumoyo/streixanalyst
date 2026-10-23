@@ -43,12 +43,15 @@ ORG_FEATURES = set(FEATURES)
 
 LIMIT_NAMES = {"analysis": "analyses", "review": "trade reviews", "ai": "StreixAI messages",
                "strategy": "strategy runs", "practice": "draw & score checks", "alerts": "active alerts",
-               "watchlist": "watchlist symbols", "layouts": "saved layouts"}
+               "watchlist": "watchlist symbols", "layouts": "saved layouts", "watches": "strategy watches"}
 DEFAULT_LIMITS = {
-    "free": dict(analysis=5, review=2, ai=10, strategy=40, practice=1, alerts=2, watchlist=12, layouts=1),
-    "trial": dict(analysis=150, review=60, ai=200, strategy=40, practice=40, alerts=50, watchlist=200, layouts=20),
-    "pro": dict(analysis=150, review=60, ai=200, strategy=40, practice=40, alerts=50, watchlist=200, layouts=20),
-    "org": dict(analysis=300, review=150, ai=400, strategy=80, practice=100, alerts=100, watchlist=300, layouts=50),
+    "free": dict(analysis=5, review=2, ai=10, strategy=40, practice=1, alerts=2, watchlist=12, layouts=1, watches=2),
+    "trial": dict(analysis=150, review=60, ai=200, strategy=40, practice=40, alerts=50, watchlist=200, layouts=20,
+                  watches=20),
+    "pro": dict(analysis=150, review=60, ai=200, strategy=40, practice=40, alerts=50, watchlist=200, layouts=20,
+                watches=20),
+    "org": dict(analysis=300, review=150, ai=400, strategy=80, practice=100, alerts=100, watchlist=300, layouts=50,
+                watches=40),
 }
 ORG_SEAT_CAP = 500                   # most seats one organization can buy in a single checkout
 DEFAULT_PRICING = {

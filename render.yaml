@@ -37,6 +37,8 @@ services:
         sync: false          # set to 1 once you have a Twelve Data plan
       - key: TWELVEDATA_API_KEY
         sync: false
+      - key: CRON_SECRET
+        generateValue: true  # the scan ping (GitHub Action watch-ping.yml) sends this; copy it into the repo secret CRON_SECRET
       - key: VAPID_PUBLIC_KEY
         sync: false
       - key: VAPID_PRIVATE_KEY

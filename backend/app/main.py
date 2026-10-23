@@ -87,9 +87,9 @@ def _background():
 
 
 def _fast_background():
-    """Alerts every 30 s; the track-record tracker every 3 minutes."""
+    """Alerts and strategy watches every 30 s; the track-record tracker every 3 minutes."""
     from .services import alerts as alert_svc
-    from .services import tracker
+    from .services import tracker, watcher
     time.sleep(20)                      # let the brain and the catalog load first
     i = 0
     while True:
@@ -97,6 +97,10 @@ def _fast_background():
             alert_svc.run_once()
         except Exception:
             log.exception("alerts failed")
+        try:
+            watcher.run_once()
+        except Exception:
+            log.exception("strategy watches failed")
         if i % 6 == 0:
             try:
                 tracker.run_once()
@@ -171,12 +175,12 @@ async def unhandled(request: Request, exc: Exception):
 
 
 from .routers import (admin, ai, alerts, analysis, auth, billing, classlive, donate, ideas, market,  # noqa: E402
-                      myanalysis, news, practice, push, replay, site, strategies, strategy, support, track, user)
+                      myanalysis, news, practice, push, replay, site, strategies, strategy, support, track, user, watches)
 
 for r in (auth.router, user.router, market.router, analysis.router, news.router, ai.router, billing.router,
           practice.router, strategy.router, track.router, alerts.router, push.router, replay.router, admin.router, site.router,
           donate.router, support.router, support.admin_router, strategies.router, myanalysis.router, classlive.router,
-          ideas.router):
+          ideas.router, watches.router):
     app.include_router(r, prefix="/api")
 
 

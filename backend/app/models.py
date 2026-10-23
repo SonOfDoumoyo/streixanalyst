@@ -306,6 +306,29 @@ class Alert(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
 
+class StrategyWatch(Base):
+    """"Watch this pair for these strategies": the background scanner looks at the pair's newest closed candles and,
+    when one of the chosen strategies fires, writes a Notification (the bell), and sends an email and a phone/browser
+    push when asked. `seen` remembers the signals already reported, so each one is sent once."""
+    __tablename__ = "strategy_watches"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str] = mapped_column(String(64), index=True)
+    tf: Mapped[str] = mapped_column(String(4), default="15m")
+    strategies: Mapped[str] = mapped_column(Text, default="[]")             # JSON list of catalog ids
+    status: Mapped[str] = mapped_column(String(12), default="active", index=True)    # active | paused
+    email: Mapped[bool] = mapped_column(Boolean, default=True)
+    push: Mapped[bool] = mapped_column(Boolean, default=True)                # phone / browser push to the user's devices
+    seen: Mapped[str] = mapped_column(Text, default="{}")                    # JSON {"<id>:<candle epoch>:<dir>": epoch}
+    last_bar: Mapped[int | None] = mapped_column(Integer, nullable=True)     # newest closed candle scanned
+    fired: Mapped[int] = mapped_column(Integer, default=0)
+    last_fired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_text: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    error: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
 class Notification(Base):
     __tablename__ = "notifications"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
