@@ -143,6 +143,12 @@ class Settings:
         # a long random string. A free scheduler (GitHub Actions, Cloud Scheduler, cron-job.org) that calls
         # POST /api/watches/cron with it keeps strategy watches scanning on a host that sleeps when idle.
         self.cron_secret = env("CRON_SECRET")
+        # Broker connections (Connect broker). MetaTrader goes through MetaApi (metaapi.cloud, a paid token): the MT
+        # option appears for people as soon as METAAPI_TOKEN is set. Binance, Bybit and OANDA use each person's own keys.
+        self.metaapi_token = env("METAAPI_TOKEN")
+        self.metaapi_region = env("METAAPI_REGION", "new-york")
+        # the key that encrypts the brokers' API keys in the database (default: derived from SECRET_KEY)
+        self.broker_key = env("BROKER_KEY")
 
         # Phone alerts (Web push). Create the keys once (see .env.example), then set all three. Off until then.
         self.vapid_public_key = env("VAPID_PUBLIC_KEY")

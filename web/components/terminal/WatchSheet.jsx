@@ -17,7 +17,7 @@ function pickTf(tf) {
   return TFS.includes(tf) ? tf : "15m";
 }
 
-export default function WatchSheet({ open, onClose, symbol, tf, onLimit }) {
+export default function WatchSheet({ open, onClose, symbol, tf, onLimit, onBroker }) {
   const { user, toast } = useAuth();
   const cat = useCatalog();
   const [sym, setSym] = useState(symbol || "");
@@ -30,6 +30,10 @@ export default function WatchSheet({ open, onClose, symbol, tf, onLimit }) {
   const [list, setList] = useState(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState(null);
+  const [brokers, setBrokers] = useState([]);
+  const [bid, setBid] = useState(null);
+  const [auto, setAuto] = useState(false);
+  const [liveOk, setLiveOk] = useState(false);
 
   const load = useCallback(() => get("/watches").then(setList).catch(() => setList({ items: [], active: 0, limit: null, email: false })), []);
 
@@ -40,6 +44,9 @@ export default function WatchSheet({ open, onClose, symbol, tf, onLimit }) {
     setNote(null);
     setSel((s) => (s.length ? s : ((user && user.strategies) || []).slice(0, 12)));
     load();
+    setAuto(false);
+    setLiveOk(false);
+    get("/brokers").then((d) => { setBrokers(d.accounts || []); setBid((b) => (b && (d.accounts || []).some((a) => a.id === b) ? b : null)); }).catch(() => setBrokers([]));
     currentPushState().then((st) => { setPushState(st); setPhone(st === "on"); }).catch(() => {});
   }, [open, symbol, tf, user, load]);
 
@@ -75,7 +82,7 @@ export default function WatchSheet({ open, onClose, symbol, tf, onLimit }) {
     if (!sym.trim()) return toast("Type the pair to watch, e.g. XAUUSD.", "error");
     setBusy(true);
     try {
-      const r = await post("/watches", { symbol: sym.trim(), tf: frame, strategies: sel, email: email && emailOk, push: phone });
+      const r = await post("/watches", { symbol: sym.trim(), tf: frame, strategies: sel, email: email && emailOk, push: phone, broker_id: bid, auto_send: !!(bid && auto), live_ok: liveOk });
       const live = r.live || [];
       setNote(live.length
         ? `Watching ${r.watch.symbol} ${r.watch.tf}. ${live.map((x) => x.name).join(", ")} ${live.length > 1 ? "are" : "is"} already live, so you won't get that one again; the next new setup alerts you.`
@@ -166,6 +173,39 @@ export default function WatchSheet({ open, onClose, symbol, tf, onLimit }) {
           </button>
         </section>
 
+        {brokers.length ? (
+          <section className="wt-sec">
+            <h4>Send to your broker</h4>
+            <div className="bk-kinds">
+              <button className={`chip${bid === null ? " on" : ""}`} onClick={() => { setBid(null); setAuto(false); }}>Alerts only</button>
+              {brokers.map((a) => (
+                <button key={a.id} className={`chip${bid === a.id ? " on" : ""}`} onClick={() => setBid(a.id)}>
+                  {a.label} <span className={`bk-tag ${a.live ? "live" : "demo"}`}>{a.live ? "LIVE" : "Demo"}</span>
+                </button>
+              ))}
+            </div>
+            {bid !== null ? (() => {
+              const a = brokers.find((x) => x.id === bid);
+              const size = a && a.settings.auto_size;
+              return (
+                <>
+                  <button className={`wt-ch${auto ? " on" : ""}`} onClick={() => size && setAuto(!auto)} disabled={!size} aria-pressed={auto}>
+                    <Icon name="zap" size={17} /><span><b>Place the order by itself</b><i>{size ? `Each new setup is sent as ${size} ${a.unit}, with its stop and target, within your limits` : "Set an auto-send size first (Connect a broker, then Limits)"}</i></span>
+                    <span className={`switch-ui${auto ? " on" : ""}`} aria-hidden="true" />
+                  </button>
+                  {auto && a.live ? <label className="check bk-warn"><input type="checkbox" checked={liveOk} onChange={(e) => setLiveOk(e.target.checked)} /> This is a live account. Orders will use real money without asking me each time.</label> : null}
+                  {!size ? <button className="wt-link" onClick={onBroker}>Open broker settings</button> : null}
+                </>
+              );
+            })() : null}
+          </section>
+        ) : onBroker ? (
+          <section className="wt-sec">
+            <h4>Send to your broker</h4>
+            <button className="wt-ch" onClick={onBroker}><Icon name="bank" size={17} /><span><b>Connect a broker</b><i>Also send each setup's entry, stop and target to MetaTrader, Binance, Bybit or OANDA</i></span></button>
+          </section>
+        ) : null}
+
         {note ? <div className="wt-note"><Icon name="check" size={15} /> {note}</div> : null}
 
         <section className="wt-sec">
@@ -180,6 +220,7 @@ export default function WatchSheet({ open, onClose, symbol, tf, onLimit }) {
             <div key={w.id} className={`wt-item${w.status === "active" ? "" : " off"}`}>
               <div className="grow">
                 <b>{w.symbol} <i>{w.tf}</i></b>
+                {w.auto_send ? <span className="wt-auto"><Icon name="zap" size={12} /> sends orders by itself</span> : null}
                 <span className="wt-names">{w.names.map((n) => n).join(" · ") || w.strategies.map((i) => (byId[i] ? byId[i].name : i)).join(" · ")}</span>
                 <span className="faint wt-meta">
                   {w.status === "paused" ? "Paused" : w.error ? `Couldn't check: ${w.error}` : w.fired ? `${w.fired} alert${w.fired > 1 ? "s" : ""} · last ${timeAgo(w.last_fired_at)}` : "Watching, nothing yet"}

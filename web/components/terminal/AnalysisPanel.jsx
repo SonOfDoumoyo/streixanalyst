@@ -304,7 +304,7 @@ function More({ title, hint, children, tour, open = false }) {
 
 /** The best entry, first and large: side, entry, stop, targets (each one tap to copy), the tested odds, the grade,
  *  the target style, and what to do with it. */
-function EntryHero({ res, hud, dec, symbol, tf, toast, onEdit, onAlert, onAsk, onTargetMode, busy, showLevels }) {
+function EntryHero({ res, hud, dec, symbol, tf, toast, onEdit, onAlert, onAsk, onTargetMode, onSend, onPine, busy, showLevels }) {
   const { settings } = useAuth();
   const p = res.plan;
   const v = res.verdict || {};
@@ -373,6 +373,8 @@ function EntryHero({ res, hud, dec, symbol, tf, toast, onEdit, onAlert, onAsk, o
       ) : null}
       <div className="axh-actions">
         {onAlert && showLevels ? <button className="btn sm primary" onClick={() => onAlert(p)}><Icon name="bell" size={14} /> Alert me</button> : null}
+        {onSend && showLevels ? <button className="btn sm" onClick={() => onSend(p)} title="Send the entry, stop loss and take profit to your broker"><Icon name="send" size={14} /> Send to broker</button> : null}
+        {onPine && showLevels ? <button className="btn sm" onClick={() => onPine(p)} title="Draw this plan on a TradingView chart"><Icon name="tv" size={14} /> TradingView</button> : null}
         {onEdit ? <button className="btn sm" onClick={() => onEdit(p)} title="Edit this analysis in My analysis, with all its drawings"><Icon name="pen" size={14} /> Edit</button> : null}
         {showLevels ? <button className="btn sm" onClick={() => copyText(all, toast, "The plan")}><Icon name="copy" size={14} /> Copy</button> : null}
         <button className="btn sm ghost" onClick={() => onAsk(`Explain this ${res.symbol} ${res.tf} analysis to me. Why ${v.action}?`)}><Icon name="sparkles" size={14} /> Ask why</button>
@@ -573,7 +575,7 @@ function StrategiesBody({ sb, onChange }) {
   );
 }
 
-export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk, onClean, onUpgrade, hiddenLayers, toggleLayer, layers, showAlt, setShowAlt, stale, symbolLabel, tf, symbol, onEditPlan, onStrategies, onTf, onFull }) {
+export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk, onClean, onUpgrade, hiddenLayers, toggleLayer, layers, showAlt, setShowAlt, stale, symbolLabel, tf, symbol, onEditPlan, onStrategies, onTf, onFull, onSend, onPine }) {
   const { settings, updateSettings, can, user, toast } = useAuth();
   const showLevels = settings.analysis.showLevels !== false;
   if (busy && !res) {
@@ -635,7 +637,7 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
         <button className="ax-stale" onClick={onAnalyse}><Icon name="refresh" size={14} /> A new candle closed: analyse again</button>
       ) : null}
       <EntryHero res={res} hud={hud} dec={dec} symbol={res.symbol || symbol} tf={res.tf} toast={toast} busy={busy} showLevels={showLevels}
-        onEdit={onEditPlan || null} onAlert={symbol ? planAlert : null} onAsk={onAsk} onTargetMode={setTargetMode} />
+        onEdit={onEditPlan || null} onAlert={symbol ? planAlert : null} onAsk={onAsk} onTargetMode={setTargetMode} onSend={onSend || null} onPine={onPine || null} />
       {res.fixed_time && settings.analysis.fixedTime ? <FixedTime ft={res.fixed_time} /> : null}
       {conflict && conflict.buyers && conflict.sellers && conflict.buyers.length && conflict.sellers.length ? (
         <div className="ax-flag warn"><Icon name="alert" size={14} /> {conflict.note}</div>

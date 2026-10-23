@@ -1748,6 +1748,232 @@ def st_catalog():
     return [s for s in st.CATALOG if not s["fixed_time"]]
 
 
+def t_brokers(c):
+    """Connect a broker and send a plan to it: each broker's request is built the way its API wants, the safety caps and
+    sanity checks hold, a double send is ignored, keys never come back, and a watch can auto-send within the caps."""
+    import hashlib
+    import hmac
+    from urllib.parse import parse_qs
+    from app.models import BrokerAccount, utcnow
+    from app.services import brokers as bk
+    from app.services import watcher
+
+    calls = []
+
+    def fake(req):
+        host, path = req.url.host, req.url.path
+        body = json.loads(req.content) if req.content else {}
+        calls.append((req.method, host, path, dict(req.url.params), body, dict(req.headers)))
+        j = lambda d, code=200: httpx.Response(code, json=d)       # noqa: E731
+        if host == "mt-provisioning-api-v1.agiliumtrade.agiliumtrade.ai":
+            if req.method == "POST":
+                return j(dict(id="mt-acc-1", state="DEPLOYED"), 201)
+            return j(dict(_id="mt-acc-1", region="london", state="DEPLOYED", connectionStatus="CONNECTED"))
+        if host.startswith("mt-client-api-v1"):
+            if path.endswith("/account-information"):
+                return j(dict(name="Demo", login=123, balance=5000.0, currency="USD", platform="mt5", server="Broker-Demo"))
+            if "/specification" in path:
+                return j(dict(volumeStep=0.01, minVolume=0.01, maxVolume=50, digits=2))
+            if path.endswith("/trade"):
+                return j(dict(numericCode=10009, stringCode="TRADE_RETCODE_DONE", message="ok", orderId=str(len(calls))))
+        if "oanda.com" in host:
+            if path.endswith("/summary"):
+                if req.headers.get("authorization") != "Bearer oanda-token":
+                    return j(dict(errorMessage="bad token"), 401)
+                return j(dict(account=dict(alias="Practice", balance="10000.00", currency="USD")))
+            if path.endswith("/orders"):
+                return j(dict(orderFillTransaction=dict(id=str(900 + len(calls)))), 201)
+        if host == "api-testnet.bybit.com":
+            if path == "/v5/account/wallet-balance":
+                return j(dict(retCode=0, result=dict(list=[dict(totalEquity="2500.5")])))
+            if path == "/v5/market/instruments-info":
+                return j(dict(retCode=0, result=dict(list=[dict(lotSizeFilter=dict(qtyStep="0.001", minOrderQty="0.001"),
+                                                                priceFilter=dict(tickSize="0.1"))])))
+            if path == "/v5/order/create":
+                return j(dict(retCode=0, result=dict(orderId=f"by-{len(calls)}")))
+        if host == "testnet.binancefuture.com":
+            if path.startswith("/fapi/v") and path.endswith("/balance"):
+                return j([dict(asset="USDT", balance="1000.0")])
+            if path == "/fapi/v1/exchangeInfo":
+                return j(dict(symbols=[dict(symbol="BTCUSDT", filters=[
+                    dict(filterType="LOT_SIZE", stepSize="0.001", minQty="0.001"),
+                    dict(filterType="PRICE_FILTER", tickSize="0.1")])]))
+            if path == "/fapi/v1/order":
+                return j(dict(orderId=777, status="NEW"))
+            if path == "/fapi/v1/algoOrder":
+                if binance_fail[0]:
+                    return j(dict(code=-4509, msg="algo rejected"), 400)
+                return j(dict(algoId=888))
+        return j(dict(message="not found"), 404)
+
+    binance_fail = [False]
+    bk.set_client(httpx.Client(transport=httpx.MockTransport(fake)))
+    signup(c, "broker@example.com")
+    ov = c.get("/api/brokers").json()
+    check(ov["available"] == dict(mt=False, binance=True, bybit=True, oanda=True) and ov["accounts"] == [], ov)
+    # MetaTrader needs the server's MetaApi token
+    mt_creds = dict(login="123456", password="pw-secret", server="Broker-Demo", platform="mt5")
+    r = c.post("/api/brokers", json=dict(kind="mt", live=False, credentials=mt_creds), headers=H)
+    check(r.status_code == 422 and "aren't switched on" in r.text, r.text)
+    # OANDA: a wrong token is refused, the right one connects, and the keys never come back
+    bad = c.post("/api/brokers", json=dict(kind="oanda", credentials=dict(token="nope", account_id="101-001-1-001")), headers=H)
+    check(bad.status_code == 422 and "refused the token" in bad.text, bad.text)
+    r = c.post("/api/brokers", json=dict(kind="oanda", label="My practice", live=False, settings=dict(max_size=5000, auto_size=500),
+                                         credentials=dict(token="oanda-token", account_id="101-001-1-001")), headers=H)
+    check(r.status_code == 200 and r.json()["info"]["balance"] == 10000.0 and r.json()["live"] is False, r.text)
+    oanda = r.json()["id"]
+    check("oanda-token" not in r.text and "oanda-token" not in c.get("/api/brokers").text, "keys are not returned")
+    db = _db()
+    row = db.get(BrokerAccount, oanda)
+    check("oanda-token" not in row.secrets and bk.unseal(row.secrets)["token"] == "oanda-token", "stored encrypted")
+    db.close()
+    plan = dict(broker_id=oanda, symbol="XAU/USD", side="long", kind="market", entry=4739.5, sl=4725.0, tps=[4768.0, 4790.0],
+                size=1000, confirm=True)
+    # nothing is sent until confirmed, and wrong-way stops or targets are refused before any request goes out
+    n0 = len(calls)
+    check(c.post("/api/brokers/send", json=dict(plan, confirm=False), headers=H).status_code == 422, "needs confirm")
+    r = c.post("/api/brokers/send", json=dict(plan, sl=4750.0), headers=H)
+    check(r.status_code == 422 and "stop loss must be below" in r.text, r.text)
+    r = c.post("/api/brokers/send", json=dict(plan, tps=[4700.0]), headers=H)
+    check(r.status_code == 422 and "above the entry" in r.text, r.text)
+    r = c.post("/api/brokers/send", json=dict(plan, size=9000), headers=H)
+    check(r.status_code == 422 and "above the 5000" in r.text, r.text)
+    check(len(calls) == n0, "refused orders never reach the broker")
+    # a good order: OANDA gets signed units, the stop and the first target
+    r = c.post("/api/brokers/send", json=dict(plan, ref="tap-1"), headers=H)
+    check(r.status_code == 200 and r.json()["ok"] and r.json()["live"] is False, r.text)
+    o = [x for x in calls if x[2].endswith("/orders")][-1][4]["order"]
+    check(o["instrument"] == "XAU_USD" and o["units"] == "1000" and o["type"] == "MARKET"
+          and o["stopLossOnFill"]["price"] == "4725.000" and o["takeProfitOnFill"]["price"] == "4768.000", o)
+    n1 = len(calls)
+    r = c.post("/api/brokers/send", json=dict(plan, ref="tap-1"), headers=H)
+    check(r.status_code == 200 and r.json()["duplicate"] and len(calls) == n1, ("a double tap sends once", r.text))
+    # a sell with split targets: units are negative and split across the targets
+    r = c.post("/api/brokers/send", json=dict(plan, side="short", kind="limit", entry=4750.0, sl=4770.0, tps=[4730.0, 4710.0],
+                                              tp_mode="split", size=1001), headers=H)
+    check(r.status_code == 200, r.text)
+    sent = [x[4]["order"] for x in calls if x[2].endswith("/orders")][-2:]
+    check([x["units"] for x in sent] == ["-501", "-500"] and sent[0]["type"] == "LIMIT" and sent[0]["price"] == "4750.000", sent)
+    # the daily order cap
+    check(c.patch(f"/api/brokers/{oanda}", json=dict(settings=dict(max_orders_day=3)), headers=H).status_code == 200, "cap")
+    r = c.post("/api/brokers/send", json=dict(plan, ref="tap-3"), headers=H)
+    check(r.status_code == 200, r.text)
+    r = c.post("/api/brokers/send", json=dict(plan, ref="tap-4"), headers=H)
+    check(r.status_code == 422 and "last 24 hours" in r.text, r.text)
+    check(c.patch(f"/api/brokers/{oanda}", json=dict(settings=dict(max_orders_day=5)), headers=H).status_code == 200, "cap back")
+    # MetaTrader through MetaApi: provisioning, region, split lots
+    settings.metaapi_token = "metaapi-token"
+    try:
+        check(c.get("/api/brokers").json()["available"]["mt"] is True, "the MT option turns on with the token")
+        r = c.post("/api/brokers", json=dict(kind="mt", live=True, settings=dict(symbol_suffix="m"), credentials=mt_creds), headers=H)
+        check(r.status_code == 200 and r.json()["info"]["balance"] == 5000.0 and r.json()["live"], r.text)
+        check("pw-secret" not in r.text, "the MT password isn't returned")
+        db = _db()
+        check("pw-secret" not in db.get(BrokerAccount, r.json()["id"]).secrets, "the MT password isn't stored")
+        db.close()
+        mt = r.json()["id"]
+        prov = [x for x in calls if x[0] == "POST" and x[2] == "/users/current/accounts"][-1]
+        check(prov[4]["login"] == "123456" and prov[4]["platform"] == "mt5" and prov[5].get("auth-token") == "metaapi-token", prov[4])
+        r = c.post("/api/brokers/send", json=dict(plan, broker_id=mt, symbol="XAUUSD", side="short", kind="limit", entry=4750.0,
+                                                  sl=4770.0, tps=[4730.0, 4710.0, 4690.0], tp_mode="split", size=0.3), headers=H)
+        check(r.status_code == 200 and r.json()["live"], r.text)
+        trades = [x for x in calls if x[2].endswith("/trade")][-3:]
+        check(all(x[1] == "mt-client-api-v1.london.agiliumtrade.ai" for x in trades), "the account's region is used")
+        check([x[4]["volume"] for x in trades] == [0.1, 0.1, 0.1] and [x[4]["takeProfit"] for x in trades] == [4730.0, 4710.0, 4690.0], trades)
+        check(trades[0][4]["actionType"] == "ORDER_TYPE_SELL_LIMIT" and trades[0][4]["symbol"] == "XAUUSDm"
+              and trades[0][4]["openPrice"] == 4750.0 and trades[0][4]["stopLoss"] == 4770.0, trades[0][4])
+        r = c.post("/api/brokers/send", json=dict(plan, broker_id=mt, symbol="XAUUSD", size=1.5), headers=H)
+        check(r.status_code == 422 and "above the 1" in r.text, ("MT lots default cap", r.text))
+    finally:
+        settings.metaapi_token = None
+    # Bybit testnet: signed headers, the quantity and prices follow the instrument's steps
+    r = c.post("/api/brokers", json=dict(kind="bybit", live=False, settings=dict(max_notional=5000),
+                                         credentials=dict(key="by-key", secret="by-secret")), headers=H)
+    check(r.status_code == 200 and r.json()["info"]["balance"] == 2500.5, r.text)
+    by = r.json()["id"]
+    r = c.post("/api/brokers/send", json=dict(plan, broker_id=by, symbol="BTC/USDT", side="long", kind="limit", entry=100000.04,
+                                              sl=99000.0, tps=[102000.07], size=0.0456), headers=H)
+    check(r.status_code == 200, r.text)
+    x = [k for k in calls if k[2] == "/v5/order/create"][-1]
+    raw = json.dumps(x[4], separators=(",", ":"))
+    want = hmac.new(b"by-secret", (x[5]["x-bapi-timestamp"] + "by-key" + x[5]["x-bapi-recv-window"] + raw).encode(), hashlib.sha256).hexdigest()
+    check(x[5]["x-bapi-sign"] == want and x[5]["x-bapi-api-key"] == "by-key", "V5 signature")
+    check(x[4]["symbol"] == "BTCUSDT" and x[4]["side"] == "Buy" and x[4]["orderType"] == "Limit" and x[4]["qty"] == "0.045"
+          and x[4]["price"] == "100000" and x[4]["stopLoss"] == "99000" and x[4]["takeProfit"] == "102000.1"
+          and x[4]["tpslMode"] == "Full", x[4])
+    r = c.post("/api/brokers/send", json=dict(plan, broker_id=by, symbol="BTC/USDT", entry=100000.0, sl=99000.0, tps=[102000.0],
+                                              size=0.1), headers=H)
+    check(r.status_code == 422 and "5,000" in r.text or "above the" in r.text, ("notional cap", r.text))
+    # Binance testnet: entry, then a stop and a take profit that close the position; a failed stop undoes the entry
+    r = c.post("/api/brokers", json=dict(kind="binance", live=False, settings=dict(max_notional=5000),
+                                         credentials=dict(key="bn-key", secret="bn-secret")), headers=H)
+    check(r.status_code == 200 and r.json()["info"]["balance"] == 1000.0, r.text)
+    bn = r.json()["id"]
+    bplan = dict(plan, broker_id=bn, symbol="BTC/USDT", side="short", kind="market", entry=100000.0, sl=101000.0,
+                 tps=[98000.0, 96000.0], size=0.0123)
+    r = c.post("/api/brokers/send", json=bplan, headers=H)
+    check(r.status_code == 200 and "take profit 1" in r.json()["note"], r.text)
+    seq = [(k[0], k[2], k[3]) for k in calls[-4:]]
+    check([s[1] for s in seq] == ["/fapi/v1/exchangeInfo", "/fapi/v1/order", "/fapi/v1/algoOrder", "/fapi/v1/algoOrder"], seq)
+    ent, sl_o, tp_o = seq[1][2], seq[2][2], seq[3][2]
+    check(ent["side"] == "SELL" and ent["quantity"] == "0.012" and ent["type"] == "MARKET" and "signature" in ent, ent)
+    q = [k[3] for k in calls[-4:]][1]
+    check(sl_o["type"] == "STOP_MARKET" and sl_o["side"] == "BUY" and sl_o["triggerPrice"] == "101000"
+          and sl_o["closePosition"] == "true" and tp_o["type"] == "TAKE_PROFIT_MARKET" and tp_o["triggerPrice"] == "98000", (sl_o, tp_o))
+    binance_fail[0] = True
+    n2 = len(calls)
+    r = c.post("/api/brokers/send", json=bplan, headers=H)
+    check(r.status_code == 422 and "algo rejected" in r.text and "nothing is left without a stop" in r.text, r.text)
+    undo = [k for k in calls[n2:] if k[2] == "/fapi/v1/order"]
+    check(len(undo) == 2 and undo[1][3].get("reduceOnly") == "true" and undo[1][3]["side"] == "BUY", ("the entry is closed again", undo))
+    binance_fail[0] = False
+    # the record
+    orders = c.get("/api/brokers/orders").json()["items"]
+    check(orders and {o["status"] for o in orders} == {"sent", "failed"} and all(o["symbol"] for o in orders), orders)
+    # a watch sends by itself within the caps: it needs a size first, and the fresh setup is placed and said in the alert
+    bar = [int(time.time()) - 4 * 3600]
+    sig = dict(id="ict_sweep_mss", name="Liquidity sweep + structure shift", dir=1, side="long", kind="market", age=0,
+               fixed_time=False, entry=4739.5, sl=4725.0, tp=4768.0, rr=2.0, chase=False)
+
+    def scan(sym, tf, want):
+        return dict(symbol="XAU/USD", tf=tf, bar=bar[0], decimals=2, price=4739.5,
+                    signals=[dict(sig, bar=bar[0])] if "ict_sweep_mss" in want else [])
+
+    old = watcher.scan_pair
+    watcher.scan_pair = scan
+    try:
+        c.patch(f"/api/brokers/{oanda}", json=dict(settings=dict(auto_size=None)), headers=H)
+        r = c.post("/api/watches", json=dict(symbol="XAUUSD", tf="15m", strategies=["ict_sweep_mss"], broker_id=oanda,
+                                            auto_send=True), headers=H)
+        check(r.status_code == 422 and "auto-send size" in r.text, r.text)
+        c.patch(f"/api/brokers/{oanda}", json=dict(settings=dict(auto_size=500)), headers=H)
+        n3 = len([k for k in calls if k[2].endswith("/orders")])
+        r = c.post("/api/watches", json=dict(symbol="XAUUSD", tf="15m", strategies=["ict_sweep_mss"], broker_id=oanda,
+                                            auto_send=True, email=False, push=False), headers=H)
+        check(r.status_code == 200 and r.json()["watch"]["auto_send"] and r.json()["watch"]["broker_id"] == oanda, r.text)
+        wid = r.json()["watch"]["id"]
+        check(len([k for k in calls if k[2].endswith("/orders")]) == n3, "nothing is placed for a setup that was already live")
+        bar[0] += 900
+        check(watcher.run_once(now=utcnow() + timedelta(minutes=16))["alerts"] == 1, "alert")
+        placed = [k for k in calls if k[2].endswith("/orders")]
+        check(len(placed) == n3 + 1 and placed[-1][4]["order"]["units"] == "500" and placed[-1][4]["order"]["stopLossOnFill"]["price"] == "4725.000", placed[-1][4])
+        nt = c.get("/api/alerts/notifications").json()["items"][0]
+        check("Sent to My practice (demo)" in nt["body"], nt["body"])
+        check(watcher.run_once(now=utcnow() + timedelta(minutes=17))["alerts"] == 0 and
+              len([k for k in calls if k[2].endswith("/orders")]) == n3 + 1, "a setup is placed once")
+        # a stale signal is never auto-placed; pausing a watch doesn't ask again; removing the broker switches auto-send off
+        check(c.patch(f"/api/watches/{wid}", json=dict(status="paused"), headers=H).status_code == 200, "pause")
+        check(c.delete(f"/api/brokers/{oanda}", headers=H).status_code == 200, "remove broker")
+        w = c.get("/api/watches").json()["items"][0]
+        check(w["broker_id"] is None and w["auto_send"] is False, w)
+    finally:
+        watcher.scan_pair = old
+    # a broker is only for plans that pay: the free plan can look, not connect
+    _set_user("broker@example.com", trial_ends_at=utcnow() - timedelta(days=1))
+    r = c.post("/api/brokers", json=dict(kind="bybit", live=False, credentials=dict(key="a", secret="b")), headers=H)
+    check(r.status_code == 402, r.text)
+
+
 def main():
     t0 = time.time()
     with client() as c:
@@ -1779,7 +2005,7 @@ def main():
         run("t_admin_accounts", t_admin_accounts, client())
         run("t_security", t_security, client())
         for t in (t_terms_and_site, t_stage2, t_practice, t_strategy, t_scalp_template, t_tracker_rules, t_track_record, t_alerts, t_push, t_replay,
-                  t_learning_export, t_strategies, t_strategy_engine, t_heads, t_hud, t_watch, t_my_analyses, t_class_live, t_ideas, t_replay_gate):
+                  t_learning_export, t_strategies, t_strategy_engine, t_heads, t_hud, t_watch, t_brokers, t_my_analyses, t_class_live, t_ideas, t_replay_gate):
             run(t.__name__, t, client())
     bad = [r for r in RESULTS if not r[1]]
     print(f"\n{len(RESULTS) - len(bad)}/{len(RESULTS)} passed in {time.time() - t0:.0f}s")

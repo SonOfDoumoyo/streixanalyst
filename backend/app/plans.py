@@ -34,6 +34,7 @@ FEATURES = {
     "branding": "Organization branding",
     "replay": "Replay: analyse past moments and make your own calls on them",
     "class_live": "Classroom live: teachers expose their chart, students watch",
+    "broker": "Connect a broker and send trade plans to it",
 }
 # Strategies are open to every plan (v1.3): everyone can build, run and save strategies, within the daily limit below.
 FREE_FEATURES = {"analysis", "review", "streixai", "news", "beginner_mode", "tv_mode", "practice", "alerts", "layouts",

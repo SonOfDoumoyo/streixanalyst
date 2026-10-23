@@ -175,12 +175,12 @@ async def unhandled(request: Request, exc: Exception):
 
 
 from .routers import (admin, ai, alerts, analysis, auth, billing, classlive, donate, ideas, market,  # noqa: E402
-                      myanalysis, news, practice, push, replay, site, strategies, strategy, support, track, user, watches)
+                      myanalysis, news, practice, push, replay, site, strategies, strategy, support, track, user, watches, brokers)
 
 for r in (auth.router, user.router, market.router, analysis.router, news.router, ai.router, billing.router,
           practice.router, strategy.router, track.router, alerts.router, push.router, replay.router, admin.router, site.router,
           donate.router, support.router, support.admin_router, strategies.router, myanalysis.router, classlive.router,
-          ideas.router, watches.router):
+          ideas.router, watches.router, brokers.router):
     app.include_router(r, prefix="/api")
 
 

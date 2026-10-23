@@ -10,8 +10,9 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..db import get_db
 from ..deps import current_user, verified_user
-from ..models import StrategyWatch, User, iso, jdump, jload
+from ..models import BrokerAccount, StrategyWatch, User, iso, jdump, jload
 from ..plans import limits_of, require_feature, tier_of
+from ..services import brokers as bk
 from ..services import engine, mailer, watcher
 
 import strategies as st
@@ -27,6 +28,9 @@ class WatchIn(BaseModel):
     strategies: list[str] = Field(min_length=1, max_length=60)
     email: bool = True
     push: bool = True
+    broker_id: int | None = None
+    auto_send: bool = False
+    live_ok: bool = False                          # the person ticked "I understand this trades real money"
 
 
 class WatchPatch(BaseModel):
@@ -35,12 +39,16 @@ class WatchPatch(BaseModel):
     tf: str | None = Field(None, max_length=4)
     email: bool | None = None
     push: bool | None = None
+    broker_id: int | None = None
+    auto_send: bool | None = None
+    live_ok: bool = False
 
 
 def _out(w):
     ids = jload(w.strategies, []) or []
     return dict(id=w.id, symbol=w.symbol, tf=w.tf, strategies=ids,
                 names=[st.BY_ID[i]["name"] for i in ids if i in st.BY_ID], status=w.status, email=w.email, push=w.push,
+                broker_id=w.broker_id, auto_send=bool(w.auto_send),
                 fired=w.fired, last_fired_at=iso(w.last_fired_at), last_text=w.last_text, checked_at=iso(w.checked_at),
                 error=w.error, created_at=iso(w.created_at))
 
@@ -56,6 +64,23 @@ def _check_room(db, user):
         msg = f"You are watching {lim} pair{'s' if lim != 1 else ''}, the most your plan allows."
         msg += " Pause or delete one, or upgrade to Pro for more." if tier_of(user) == "free" else " Pause or delete one first."
         raise HTTPException(429, detail=dict(code="limit", kind="watches", limit=lim, used=_active(db, user), message=msg))
+
+
+def _auto(db, user, w, live_ok):
+    """Checks a watch's broker settings: the account is the person's, and auto-send has a size set (and, on a live
+    account, the person said they understand)."""
+    if w.broker_id is None:
+        w.auto_send = False
+        return
+    a = db.get(BrokerAccount, w.broker_id)
+    if not a or a.user_id != user.id:
+        raise HTTPException(404, "Broker account not found.")
+    if w.auto_send:
+        require_feature(user, "broker")
+        if not bk.cfg(a).get("auto_size"):
+            raise HTTPException(422, "Set an auto-send size on this broker account first (Connect broker → Settings).")
+        if a.live and not live_ok:
+            raise HTTPException(422, "This is a live account: confirm you understand orders will use real money.")
 
 
 def _ids(raw):
@@ -93,7 +118,8 @@ def create_watch(body: WatchIn, user: User = Depends(verified_user), db: Session
     _check_room(db, user)
     sym = body.symbol.strip().upper()
     w = StrategyWatch(user_id=user.id, symbol=sym, tf=_tf(body.tf), strategies=jdump(_ids(body.strategies)),
-                      email=body.email, push=body.push)
+                      email=body.email, push=body.push, broker_id=body.broker_id, auto_send=body.auto_send)
+    _auto(db, user, w, body.live_ok)
     try:
         res = watcher.first_look(db, w, user)                     # checks the pair loads, and arms the watch
     except engine.EngineError as e:
@@ -124,6 +150,13 @@ def patch_watch(wid: int, body: WatchPatch, user: User = Depends(verified_user),
         w.email = body.email
     if body.push is not None:
         w.push = body.push
+    changing = body.auto_send is True or "broker_id" in body.model_fields_set
+    if "broker_id" in body.model_fields_set:
+        w.broker_id = body.broker_id
+    if body.auto_send is not None:
+        w.auto_send = body.auto_send
+    if changing:                                   # pausing or renaming a watch doesn't re-ask
+        _auto(db, user, w, body.live_ok)
     db.commit()
     return _out(w)
 

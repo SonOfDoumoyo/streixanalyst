@@ -9,6 +9,7 @@ pydantic>=2.7
 python-multipart>=0.0.9
 requests>=2.31
 pywebpush>=2.0         # phone alerts (Web push), see .env.example
+cryptography>=42       # encrypts the brokers' API keys in the database
 
 # the Guru analyst (same modules as notebook 6)
 numpy>=1.26

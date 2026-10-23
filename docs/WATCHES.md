@@ -24,3 +24,7 @@ is not announced.
   header `X-Cron-Secret: <CRON_SECRET>`.
 
 Plan limits: 2 watches on the free plan, 20 on Pro (admin can change them under limits).
+
+## Send setups to your broker
+A watch can also send each new setup to a connected broker (see `BROKERS.md`): choose an account under **Send to your
+broker**, and switch on **Place the order by itself** to have the order placed with the account's auto-send size.

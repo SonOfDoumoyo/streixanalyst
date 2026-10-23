@@ -24,7 +24,7 @@ from sqlalchemy import select
 from ..config import settings
 from ..db import SessionLocal
 from ..models import Notification, StrategyWatch, User, jdump, jload, utcnow
-from . import engine, mailer, push
+from . import brokers, engine, mailer, push
 
 import market_data as md   # noqa: E402  (engine put guru/ on the path)
 import strategies as st    # noqa: E402
@@ -172,6 +172,14 @@ def apply_scan(db, w, user, res, now, quiet=False):
             fresh.append(sig)
     for sig in fresh:
         title, body = message(sig, res["symbol"], res["tf"], res["decimals"])
+        if w.auto_send and w.broker_id:
+            try:
+                note = brokers.auto_place(db, user, w, sig, res["symbol"])
+            except Exception:
+                log.exception("auto-send failed")
+                note = "Not sent to your broker: something went wrong on our side."
+            if note:
+                body += "\n" + note
         deliver(db, user, w, title, body, f"/terminal?s={res['symbol']}&tf={res['tf']}")
         w.fired = (w.fired or 0) + 1
         w.last_fired_at, w.last_text = now, title[:200]

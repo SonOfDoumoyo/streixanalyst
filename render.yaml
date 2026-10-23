@@ -37,6 +37,10 @@ services:
         sync: false          # set to 1 once you have a Twelve Data plan
       - key: TWELVEDATA_API_KEY
         sync: false
+      - key: METAAPI_TOKEN
+        sync: false          # metaapi.cloud token (paid): switches on "Connect MetaTrader" for everyone
+      - key: BROKER_KEY
+        sync: false          # optional: key that encrypts saved broker API keys (default: derived from SECRET_KEY)
       - key: CRON_SECRET
         generateValue: true  # the scan ping (GitHub Action watch-ping.yml) sends this; copy it into the repo secret CRON_SECRET
       - key: VAPID_PUBLIC_KEY

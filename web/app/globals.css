@@ -1975,3 +1975,37 @@ table.t tr:last-child td { border-bottom: 0; }
 .wt-item b i { font-style: normal; font-weight: 600; color: var(--text-3); margin-left: 4px; }
 .wt-names, .wt-meta { display: block; font-size: 0.78rem; line-height: 1.4; }
 .wt-names { color: var(--text-2); margin-top: 1px; }
+
+/* ── Brokers: connect, send, TradingView script ────────────────────────────────────────────────────────────── */
+.bk { display: flex; flex-direction: column; gap: 18px; padding-bottom: 6px; }
+.bk-kinds { display: flex; flex-wrap: wrap; gap: 6px; }
+.bk-kinds .chip { display: inline-flex; align-items: center; gap: 6px; }
+.bk-kinds .chip:disabled { opacity: 0.5; }
+.bk-form { display: flex; flex-direction: column; gap: 10px; margin-top: 12px; }
+.bk-about { margin: 0; font-size: 0.86rem; color: var(--text-2); line-height: 1.5; max-width: 60ch; }
+.bk-h { margin: 8px 0 0; font-size: 0.88rem; }
+.bk-note { margin: 0; font-size: 0.78rem; line-height: 1.45; }
+.bk-limits, .bk-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.bk-f { display: flex; flex-direction: column; gap: 4px; }
+.bk-f > span { font-size: 0.76rem; color: var(--text-3); font-weight: 600; }
+.bk-acct { border: 1px solid var(--line); background: var(--bg-2); border-radius: 12px; padding: 10px 6px 10px 12px; margin-bottom: 8px; }
+.bk-top { display: flex; align-items: center; gap: 4px; }
+.bk-top b { margin-right: 8px; }
+.bk-meta { display: block; font-size: 0.78rem; margin-top: 2px; }
+.bk-err { display: block; font-size: 0.78rem; color: var(--down); margin-top: 2px; }
+.bk-edit { display: flex; flex-direction: column; gap: 10px; padding: 12px 6px 4px 0; }
+.bk-tag { display: inline-block; font-size: 0.68rem; font-weight: 800; padding: 2px 7px; border-radius: 999px; letter-spacing: 0.02em; vertical-align: 1px; }
+.bk-tag.demo { background: rgba(41, 98, 255, 0.16); color: var(--brand-2); }
+.bk-tag.live { background: rgba(240, 79, 106, 0.16); color: var(--down); }
+.bk-plan { display: flex; flex-direction: column; gap: 2px; }
+.bk-plan b { font-size: 1.05rem; }
+.bk-warn { display: flex; gap: 8px; align-items: flex-start; font-size: 0.84rem; line-height: 1.45; padding: 10px 12px; border-radius: 12px; background: rgba(240, 79, 106, 0.1); }
+.bk-error { display: flex; gap: 8px; padding: 10px 12px; border-radius: 12px; background: rgba(240, 79, 106, 0.12); color: var(--text); font-size: 0.86rem; line-height: 1.45; }
+.bk-error svg { flex: none; margin-top: 2px; color: var(--down); }
+.bk-none { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
+.btn.bk-live { background: var(--down); border-color: var(--down); color: #fff; }
+.bk-steps { margin: 0; padding-left: 20px; font-size: 0.88rem; line-height: 1.7; color: var(--text-2); }
+.bk-code { width: 100%; min-height: 200px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.74rem; line-height: 1.5;
+  padding: 12px; border-radius: 12px; border: 1px solid var(--line-2); background: var(--bg); color: var(--text-2); white-space: pre; overflow: auto; }
+.bk-usid { font-size: 0.84rem; }
+.wt-auto { display: inline-flex; align-items: center; gap: 4px; font-size: 0.74rem; font-weight: 700; color: var(--brand-2); margin: 2px 0; }

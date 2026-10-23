@@ -319,6 +319,8 @@ class StrategyWatch(Base):
     status: Mapped[str] = mapped_column(String(12), default="active", index=True)    # active | paused
     email: Mapped[bool] = mapped_column(Boolean, default=True)
     push: Mapped[bool] = mapped_column(Boolean, default=True)                # phone / browser push to the user's devices
+    broker_id: Mapped[int | None] = mapped_column(Integer, nullable=True)    # connected broker account to send setups to
+    auto_send: Mapped[bool] = mapped_column(Boolean, default=False)          # place the order by itself when it fires
     seen: Mapped[str] = mapped_column(Text, default="{}")                    # JSON {"<id>:<candle epoch>:<dir>": epoch}
     last_bar: Mapped[int | None] = mapped_column(Integer, nullable=True)     # newest closed candle scanned
     fired: Mapped[int] = mapped_column(Integer, default=0)
@@ -327,6 +329,45 @@ class StrategyWatch(Base):
     checked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     error: Mapped[str | None] = mapped_column(String(200), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class BrokerAccount(Base):
+    """A broker the person connected, so a plan can be sent to it. The keys are stored encrypted (services/brokers.py);
+    they are never sent back to the browser."""
+    __tablename__ = "broker_accounts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(12))                            # mt | binance | bybit | oanda
+    label: Mapped[str] = mapped_column(String(60), default="")
+    live: Mapped[bool] = mapped_column(Boolean, default=False)               # real money (False: demo / testnet / practice)
+    secrets: Mapped[str] = mapped_column(Text, default="")                   # encrypted JSON
+    settings: Mapped[str] = mapped_column(Text, default="{}")                # JSON: caps, auto-send size, suffix, region
+    info: Mapped[str] = mapped_column(Text, default="{}")                    # JSON: last balance / account name
+    status: Mapped[str] = mapped_column(String(12), default="ok")            # ok | pending | error
+    error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+
+
+class BrokerOrder(Base):
+    """Every order sent (or refused) to a broker, by hand or by a watch: the person's own record."""
+    __tablename__ = "broker_orders"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    account_id: Mapped[int | None] = mapped_column(ForeignKey("broker_accounts.id", ondelete="SET NULL"), nullable=True,
+                                                   index=True)
+    symbol: Mapped[str] = mapped_column(String(64))
+    side: Mapped[str] = mapped_column(String(6))
+    kind: Mapped[str] = mapped_column(String(8), default="market")
+    entry: Mapped[float] = mapped_column(Float)
+    sl: Mapped[float] = mapped_column(Float)
+    tps: Mapped[str] = mapped_column(Text, default="[]")
+    size: Mapped[float] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String(10), default="sent")          # sent | failed
+    external: Mapped[str] = mapped_column(Text, default="[]")                # the broker's order / position ids
+    error: Mapped[str | None] = mapped_column(String(400), nullable=True)
+    source: Mapped[str] = mapped_column(String(8), default="manual")         # manual | watch
+    ref: Mapped[str | None] = mapped_column(String(120), unique=True, nullable=True)   # stops a double send
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow, index=True)
 
 
 class Notification(Base):
