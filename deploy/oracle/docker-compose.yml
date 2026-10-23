@@ -11,7 +11,7 @@ services:
       - POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       - POSTGRES_DB: streix
     env_file:
-      - ../../streixanalyst-api.env
+      - ../backend/streixanalyst-api.env
     volumes:
       - pgdata:/var/lib/postgresql
     healthcheck:
@@ -23,13 +23,13 @@ services:
   api:
     build: ../../backend
     restart: unless-stopped
-    env_file: ../../streixanalyst-api.env
+    env_file: ../backend/streixanalyst-api.env
     environment:
       ENV: production
       DATABASE_URL: postgresql://streix:${POSTGRES_PASSWORD}@db:5432/streix
       DATA_DIR: /var/data
       GURU_BRAIN_PATH: /var/data/models/guru_brain.joblib      # an uploaded brain lives on the volume; the bundled one is the fallback
-      FRONTEND_URL: https://${DOMAIN:?set DOMAIN in ../../streixanalyst-api.env}
+      FRONTEND_URL: https://${DOMAIN:?set DOMAIN in ../backend/streixanalyst-api.env}
       ENABLE_BACKGROUND: "1"            # alerts, strategy watches, the tracker and self-learning run inside the API
     volumes:
       - apidata:/var/data
