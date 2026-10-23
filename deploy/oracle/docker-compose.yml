@@ -43,34 +43,34 @@ services:
       retries: 5
       start_period: 60s
 
-  web:
-    build:
-      context: ../../web
-      args:
-        BACKEND_URL: http://api:8000
-    restart: unless-stopped
-    depends_on:
-      - api
+  # web:
+  #   build:
+  #     context: ../../web
+  #     args:
+  #       BACKEND_URL: http://api:8000
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - api
 
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    environment:
-      DOMAIN: ${DOMAIN}
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - web
-      - api
+  # caddy:
+  #   image: caddy:2-alpine
+  #   restart: unless-stopped
+  #   environment:
+  #     DOMAIN: ${DOMAIN}
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #     - "443:443/udp"
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddy_data:/data
+  #     - caddy_config:/config
+  #   depends_on:
+  #     - web
+  #     - api
 
 volumes:
   pgdata:
   apidata:
-  caddy_data:
-  caddy_config:
+  # caddy_data:
+  # caddy_config:
