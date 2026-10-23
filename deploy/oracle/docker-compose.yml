@@ -31,6 +31,8 @@ services:
       GURU_BRAIN_PATH: /var/data/models/guru_brain.joblib      # an uploaded brain lives on the volume; the bundled one is the fallback
       FRONTEND_URL: https://${DOMAIN:?set DOMAIN in ../../backend/streixanalyst-api.env}
       ENABLE_BACKGROUND: "1"            # alerts, strategy watches, the tracker and self-learning run inside the API
+    ports:
+      -"8000:8000"
     volumes:
       - apidata:/var/data
     depends_on:
