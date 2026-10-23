@@ -7,9 +7,9 @@ services:
     image: postgres:18-alpine            # the same major version as Render's database, so its backup restores cleanly
     restart: unless-stopped
     environment:
-      - POSTGRES_USER: streix
-      - POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      - POSTGRES_DB: streix
+      POSTGRES_USER: streix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: streix
     env_file:
       - ../../backend/streixanalyst-api.env
     volumes:
