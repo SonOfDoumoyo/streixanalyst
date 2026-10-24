@@ -457,17 +457,17 @@ function Desk() {
       <main className="desk-wrap">
         <List items={items} busy={busy} onNew={() => setNewOpen(true)} onOpen={open} onDelete={remove} />
       </main>
-      {setSearch == false && <Modal open={newOpen} onClose={() => setNewOpen(false)} title="New analysis">
+      <Modal open={newOpen} onClose={() => setNewOpen(false)} title="New analysis">
         <div className="stack">
           <div className="field"><label>Market</label>
-            <button className="mkt-chip" onClick={() => setSearch(true)} style={{ maxWidth: "none" }}><span className="mkt-sym">{symbol}</span><Icon name="chevronDown" size={14} /></button>
+            <button className="mkt-chip" onClick={() => {setSearch(true); setNewOpen(false)}} style={{ maxWidth: "none" }}><span className="mkt-sym">{symbol}</span><Icon name="chevronDown" size={14} /></button>
           </div>
           <div className="field"><label>Timeframe</label>
             <div className="seg" style={{ flexWrap: "wrap" }}>{TFS.filter((t) => t !== "3D" && t !== "1M").map((t) => <button key={t} className={tf === t ? "on" : ""} onClick={() => setTf(t)}>{t}</button>)}</div>
           </div>
           <div className="row" style={{ justifyContent: "flex-end" }}><button className="btn primary" onClick={create}><Icon name="pen" size={15} /> Start drawing</button></div>
         </div>
-      </Modal>}
+      </Modal>
       <SymbolSearch open={search} onClose={() => setSearch(false)} onPick={(s) => { setSymbol(cleanSymbol(s)); setSearch(false); }} watchlist={[]} onToggleWatch={() => {}} />
     </div>
   );
