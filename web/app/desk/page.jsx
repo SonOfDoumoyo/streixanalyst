@@ -457,7 +457,7 @@ function Desk() {
       <main className="desk-wrap">
         <List items={items} busy={busy} onNew={() => setNewOpen(true)} onOpen={open} onDelete={remove} />
       </main>
-      <Modal open={newOpen} onClose={() => setNewOpen(false)} title="New analysis">
+      {setSearch == false && <Modal open={newOpen} onClose={() => setNewOpen(false)} title="New analysis">
         <div className="stack">
           <div className="field"><label>Market</label>
             <button className="mkt-chip" onClick={() => setSearch(true)} style={{ maxWidth: "none" }}><span className="mkt-sym">{symbol}</span><Icon name="chevronDown" size={14} /></button>
@@ -467,7 +467,7 @@ function Desk() {
           </div>
           <div className="row" style={{ justifyContent: "flex-end" }}><button className="btn primary" onClick={create}><Icon name="pen" size={15} /> Start drawing</button></div>
         </div>
-      </Modal>
+      </Modal>}
       <SymbolSearch open={search} onClose={() => setSearch(false)} onPick={(s) => { setSymbol(cleanSymbol(s)); setSearch(false); }} watchlist={[]} onToggleWatch={() => {}} />
     </div>
   );
