@@ -468,7 +468,7 @@ function Desk() {
           <div className="row" style={{ justifyContent: "flex-end" }}><button className="btn primary" onClick={create}><Icon name="pen" size={15} /> Start drawing</button></div>
         </div>
       </Modal>
-      <SymbolSearch open={search} onClose={() => setSearch(false)} onPick={(s) => { setSymbol(cleanSymbol(s)); setSearch(false); }} watchlist={[]} onToggleWatch={() => {}} />
+      <SymbolSearch open={search} onClose={() => setSearch(false)} onPick={(s) => { setSymbol(cleanSymbol(s)); setSearch(false); setNewOpen(true)}} watchlist={[]} onToggleWatch={() => {}} />
     </div>
   );
 }
