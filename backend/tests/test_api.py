@@ -30,6 +30,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 from fastapi.testclient import TestClient             # noqa: E402
 
 import fake_http                                      # noqa: E402
+import pandas as pd                                   # noqa: E402
 import fake_web                                       # noqa: E402
 from app.config import settings                       # noqa: E402
 from app.main import app                              # noqa: E402
@@ -1571,7 +1572,7 @@ def t_hud(c):
     signup(c, "hud@example.com")
     seen_news = False
     for sym, tf in (("EURUSD", "15m"), ("BTCUSDT", "1h"), ("ETHUSDT", "4h"), ("SOLUSDT", "15m")):
-        a = c.post("/api/analysis/run", json=dict(symbol=sym, tf=tf), headers=H).json()
+        a = c.post("/api/analysis/run", json=dict(symbol=sym, tf=tf, levels=True), headers=H).json()
         h = a["hud"]
         check("error" not in h and h["state"] in ("best", "go", "dont") and h["title"] and h["summary"], h)
         check(h["state"] != "go" or a["verdict"]["trade"], (h["state"], a["verdict"]))
@@ -1614,7 +1615,8 @@ def t_hud(c):
     check(seen_news, "the fake calendar has a high-impact release")
     # chosen strategies with no setup: the best entry still comes, from the analyst's own setups, said plainly
     for sym in ("BTCUSDT", "ETHUSDT", "SOLUSDT"):
-        a = c.post("/api/analysis/run", json=dict(symbol=sym, tf="1h", strategies=["ict_sweep_mss"]), headers=H).json()
+        a = c.post("/api/analysis/run", json=dict(symbol=sym, tf="1h", strategies=["ict_sweep_mss"], levels=True),
+                   headers=H).json()
         check(a["plan"] and a["entry_source"] in ("strategies", "analyst", "market"), a["entry_source"])
         if a["entry_source"] != "strategies":
             check("None of your strategies" in (a["fallback_note"] or "") or a["entry_source"] == "market", a["fallback_note"])
@@ -1622,8 +1624,9 @@ def t_hud(c):
             mine = [m for r in a["mtf"]["rows"] for m in r["scan"]["mine"]]
             check(mine and all(m["id"] == "ict_sweep_mss" and m["text"] for m in mine), mine)
     # win-rate targets: TP1 moves closer (where most similar setups got first), the liquidity target stays
-    liq = c.post("/api/analysis/run", json=dict(symbol="EURUSD", tf="15m"), headers=H).json()["plan"]
-    win = c.post("/api/analysis/run", json=dict(symbol="EURUSD", tf="15m", target_mode="winrate"), headers=H).json()
+    liq = c.post("/api/analysis/run", json=dict(symbol="EURUSD", tf="15m", levels=True), headers=H).json()["plan"]
+    win = c.post("/api/analysis/run", json=dict(symbol="EURUSD", tf="15m", target_mode="winrate", levels=True),
+                 headers=H).json()
     check(win["target_mode"] == "winrate" and win["plan"]["rr"][0] <= liq["rr"][0] + 1e-9, (win["plan"]["rr"], liq["rr"]))
     if win["plan"]["rr"][0] < liq["rr"][0] - 1e-6:
         check("win-rate target" in win["plan"]["tp_labels"][0] and win["plan"]["p_tp"][0] > liq["p_tp"][0], win["plan"])
@@ -1672,8 +1675,11 @@ def t_watch(c):
     old_send = mailer.send
     mailer.send = lambda to, subject, text, html=None: sent.append((to, subject, text, html)) or True
     try:
+        # this person has entry, SL and TP on for BTCUSDT (off is the default): alerts carry the prices
+        c.patch("/api/auth/me", json=dict(settings=dict(analysis=dict(levelsPairs=["BTCUSDT"]))), headers=H)
         r = c.post("/api/watches", json=dict(symbol="btcusdt", tf="15m", strategies=ids, email=True, push=False), headers=H)
         check(r.status_code == 200, r.text)
+        check(r.json()["live"][0].get("sl") == 95.0, r.json()["live"])
         j = r.json()
         wid = j["watch"]["id"]
         check(j["watch"]["symbol"] == "BTCUSDT" and len(j["live"]) == 1 and j["live"][0]["side"] == "long", j)
@@ -1689,6 +1695,9 @@ def t_watch(c):
         n0 = nt["items"][0]
         check(nt["unread"] == 1 and n0["kind"] == "watch" and "Buy setup on BTCUSDT 15m" in n0["title"], nt)
         check("Stop loss 95.00" in n0["body"] and "Take profit 112.50" in n0["body"] and "2.5×" in n0["body"], n0["body"])
+        # with entry/SL/TP off for the pair, the alert gives the side and the setup only
+        t_off, b_off = watcher.message(dict(live, bar=bar[0]), "BTCUSDT", "15m", 2, levels=False)
+        check("buy setup" in b_off and "Stop loss" not in b_off and "95.00" not in b_off and "100.00" not in b_off, b_off)
         check(n0["link"] == "/terminal?s=BTCUSDT&tf=15m", n0["link"])
         check(len(sent) == 1 and sent[0][0] == "watch@example.com" and "Open the chart" in sent[0][3], sent)
         # a different candle, same strategy: reported again; a paused watch: silent
@@ -1974,6 +1983,231 @@ def t_brokers(c):
     check(r.status_code == 402, r.text)
 
 
+
+def _no_trade_prices(a):
+    """With entry/SL/TP off, no price to enter, stop or take profit at anywhere in the analysis."""
+    check(a["levels_off"] is True and a["plan"] is None and a["alternative"] is None and a["plans"] == [], a["verdict"])
+    check(not a["how_to_enter"] and a["fallback_note"] is None, a["how_to_enter"])
+    v = a["verdict"]
+    check(v["levels_off"] and not v["trade"] and v["lean"] in ("long", "short", None) and v["headline"], v)
+    check(not any(k in v for k in ("ep", "sl", "tp", "tps")), v)
+    h = a["hud"]
+    check(h["state"] == "read" and h["entry"] is None and h["path"] is None and h["summary"] == h["headline"], h)
+    blob = json.dumps(dict(mtf=a["mtf"], strategies=a["strategies"]))
+    check('"entry"' not in blob and '"sl"' not in blob and '"tp"' not in blob, "no prices in the tables")
+    import re
+    for rep in (a["report"], a["report_pro"] or "", a["report_beginner"] or ""):
+        hit = re.search(r"(?<![A-Za-z])EP \d|Stop loss: \d|TP\d:? \d|first target \d|Entry: (BUY|SELL)", rep)
+        check(hit is None, rep[max(0, hit.start() - 200):hit.end() + 80] if hit else "")
+    check(not any(d.get("layer") == "plan" for d in a["drawings"]), [d for d in a["drawings"] if d.get("layer") == "plan"][:2])
+    s = engine.summarize(a)
+    check(s["plan"] is None and s["levels_off"] is True, s)
+
+
+def t_levels_switch(c):
+    """Entry, stop loss and take profit are off by default: the analyst gives its reading only. The person turns them on
+    for one pair, or for every pair, and StreixAI is told not to give levels while they are off."""
+    from types import SimpleNamespace
+    signup(c, "levels@example.com")
+    a = c.post("/api/analysis/run", json=dict(symbol="EURUSD", tf="15m"), headers=H).json()
+    _no_trade_prices(a)
+    check(a["short"] is None and a["structure"]["trend"] in (1, -1, 0) and a["levels"], "the reading is all there")
+    # turned on for EURUSD only: EURUSD gets a plan, BTCUSDT doesn't
+    c.patch("/api/auth/me", json=dict(settings=dict(analysis=dict(levelsPairs=["EURUSD"]))), headers=H)
+    on = c.post("/api/analysis/run", json=dict(symbol="eurusd", tf="15m"), headers=H).json()
+    check(not on["levels_off"] and on["plan"] and on["plan"]["entry"] and on["plan"]["sl"] and on["plan"]["tps"], on["verdict"])
+    _no_trade_prices(c.post("/api/analysis/run", json=dict(symbol="BTCUSDT", tf="1h"), headers=H).json())
+    # every pair
+    c.patch("/api/auth/me", json=dict(settings=dict(analysis=dict(levelsAll=True, levelsPairs=[]))), headers=H)
+    check(c.post("/api/analysis/run", json=dict(symbol="BTCUSDT", tf="1h"), headers=H).json()["plan"], "all pairs on")
+    # the request can still ask for the reading only
+    _no_trade_prices(c.post("/api/analysis/run", json=dict(symbol="BTCUSDT", tf="1h", levels=False), headers=H).json())
+    c.patch("/api/auth/me", json=dict(settings=dict(analysis=dict(levelsAll=False))), headers=H)
+    # the history keeps no prices for a reading
+    hist = c.get("/api/analysis/history").json()["items"]
+    check(hist[0]["entry"] is None and hist[0]["sl"] is None, hist[0])
+    u = SimpleNamespace(first_name="Ada", experience="beginner")
+    check("TRADE LEVELS ARE OFF" in streixai.system_prompt(u, "pro", dict(levels_off=True)), "AI told")
+    check("TRADE LEVELS ARE OFF" not in streixai.system_prompt(u, "pro", dict(levels_off=False)), "AI not told")
+    from app.prefs import levels_on, pair_key
+    check(pair_key("OANDA:EUR/USD") == pair_key("eurusd") == "EURUSD", pair_key("OANDA:EUR/USD"))
+    check(levels_on(SimpleNamespace(settings_json=json.dumps(dict(analysis=dict(levelsPairs=["eur/usd"])))), "EURUSD"), "match")
+    check(not levels_on(SimpleNamespace(settings_json=None), "EURUSD") and not levels_on(None, "EURUSD"), "default off")
+
+
+def t_short_chart(c):
+    """A market with little history (a new listing) still loads every candle it has, and the analysis reads it on its
+    strategies without entry, stop or target. Fewer than a handful of candles: a plain message, not an error page."""
+    signup(c, "short@example.com")
+    real = md._series
+
+    def trimmed(source, native, tf, start, end, refresh_s):
+        df = real(source, native, tf, start, end, refresh_s)
+        if "LTC" in native.upper():
+            return df.iloc[-20:]
+        if "BCH" in native.upper():
+            return df.iloc[-3:]
+        return df
+    md._series = trimmed
+    md._WORKING.clear()
+    try:
+        r = c.get("/api/market/candles?symbol=LTCUSDT&tf=1h&bars=600")
+        check(r.status_code == 200, r.text)
+        j = r.json()
+        check(j["short"] is True and 15 <= len(j["candles"]) <= 21 and j["candles_needed"] == 30 and j["analysis_needs"] == 120, {k: j[k] for k in ("short", "candles_needed")})
+        full = c.get("/api/market/candles?symbol=BTCUSDT&tf=1h&bars=600").json()
+        check(full["short"] is False and len(full["candles"]) >= 500, full["short"])
+        # turned on for the pair, but there's too little history: a reading, on the chosen strategies
+        c.patch("/api/auth/me", json=dict(settings=dict(analysis=dict(levelsPairs=["LTCUSDT"]))), headers=H)
+        a = c.post("/api/analysis/run", json=dict(symbol="LTCUSDT", tf="1h", strategies=["ote_pullback", "ict_sweep_mss"]),
+                   headers=H)
+        check(a.status_code == 200, a.text)
+        a = a.json()
+        _no_trade_prices(a)
+        check(a["short"] and a["short"]["need"] == 120 and a["short"]["candles"] < 120, a["short"])
+        check(a["verdict"]["short"] and "candles" in a["verdict"]["headline"], a["verdict"]["headline"])
+        check(a["strategies"]["mode"] == "chosen" and len(a["strategies"]["items"]) == 2, a["strategies"])
+        check(any("Only" in n and "candles" in n for n in a["notes"]), a["notes"])
+        check(a["hud"]["sub"].startswith("Too few candles"), a["hud"]["sub"])
+        # three candles: too few to read, said plainly
+        r = c.post("/api/analysis/run", json=dict(symbol="BCHUSDT", tf="1h"), headers=H)
+        check(r.status_code == 422 and "too few to read" in r.json()["detail"], r.text)
+        check(c.get("/api/market/candles?symbol=BCHUSDT&tf=1h").status_code == 200, "the chart still loads")
+    finally:
+        md._series = real
+        md._WORKING.clear()
+
+
+class _TDSession(fake_web.Session):
+    """Twelve Data on top of the offline markets: each key answers as the test sets it ('ok', 'minute', 'day', 'bad')."""
+    def __init__(self, keys):
+        super().__init__()
+        self.keys, self.calls = keys, []
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        if "api.twelvedata.com" not in url:
+            return super().get(url, params, headers, timeout)
+        import synth
+        params = params or {}
+        key = params.get("apikey")
+        self.calls.append((key, params.get("symbol"), params.get("interval")))
+        mode = self.keys.get(key, "bad")
+        if mode == "minute":
+            return fake_http.Resp(200, {"code": 429, "status": "error", "message": "You have run out of API credits for "
+                                        "the current minute. 9 API credits were used, with the current limit being 8."})
+        if mode == "day":
+            return fake_http.Resp(429, {"code": 429, "status": "error", "message": "You have run out of API credits for "
+                                        "the day. 801 API credits were used, with the current limit being 800."})
+        if mode == "bad":
+            return fake_http.Resp(401, {"code": 401, "status": "error", "message": "**apikey** parameter is incorrect"})
+        if params["symbol"] == "XAU/USD":
+            return fake_http.Resp(200, {"code": 403, "status": "error", "message": "This symbol is available starting "
+                                        "with the Grow plan."})
+        minutes = {"1min": 1, "5min": 5, "15min": 15, "30min": 30, "1h": 60, "4h": 240, "1day": 1440}[params["interval"]]
+        s, e = pd.Timestamp(params["start_date"], tz="UTC"), pd.Timestamp(params["end_date"], tz="UTC")
+        df = synth.window(params["symbol"], s, e, minutes)
+        df = df[(df.index >= s) & (df.index <= e)].tail(5000)
+        if not len(df):
+            return fake_http.Resp(200, {"code": 400, "status": "error", "message": "No data is available on the "
+                                        "specified dates. Try setting different start/end dates."})
+        return fake_http.Resp(200, {"meta": {"symbol": params["symbol"]}, "status": "ok", "values": [
+            dict(datetime=t.strftime("%Y-%m-%d %H:%M:%S"), open=str(o), high=str(h), low=str(l), close=str(cl),
+                 volume=str(v)) for t, o, h, l, cl, v in zip(df.index, df["open"], df["high"], df["low"], df["close"],
+                                                            df["volume"])]})
+
+
+def t_twelvedata(c):
+    """Forex (and metals, indices, stocks) come from Twelve Data on a ring of API keys: a key whose credits run out
+    (for the minute or the day) rests and the next one carries on; a wrong key rests for an hour; with every key resting
+    the free sources answer, and Twelve Data is back as soon as a key is ready."""
+    keys = dict(k1="minute", k2="day", k3="ok", k4="ok")
+    old_env = {k: os.environ.get(k) for k in ("TWELVEDATA_API_KEYS", "TWELVEDATA_API_KEY", "TWELVEDATA_API_KEY_1",
+                                              "TWELVEDATA_ENABLED")}
+    sess = _TDSession(keys)
+
+    def fresh():
+        md._MEM.clear()
+        md._WORKING.clear()
+        md._CHECKED.clear()
+    try:
+        os.environ.pop("TWELVEDATA_ENABLED", None)
+        os.environ["TWELVEDATA_API_KEYS"] = "k1, k2"
+        os.environ["TWELVEDATA_API_KEY"] = "k3"
+        os.environ["TWELVEDATA_API_KEY_1"] = "k4"
+        check(md.td_keys() == ["k1", "k2", "k3", "k4"] and md.twelvedata_on(), md.td_keys())
+        os.environ["TWELVEDATA_ENABLED"] = "0"
+        check(not md.twelvedata_on(), "can be switched off")
+        os.environ.pop("TWELVEDATA_ENABLED")
+        md._TD.update(i=0, rest={}, used={}, bad_symbol={}, last_error=None)
+        md.set_http(sess)
+        fresh()
+        C = md.get_candles("EURUSD", "1h", bars=300)
+        check(C["source"] == "twelvedata" and C["native"] == "EUR/USD" and len(C["df"]) >= 250, (C["source"], len(C["df"])))
+        st_ = md.td_status()
+        check(st_["keys"] == 4 and st_["ready"] == 2 and [r["current"] for r in st_["items"]] == [False, False, True, False], st_)
+        now = time.time()
+        check(md._TD["rest"]["k1"] - now <= 62 and md._TD["rest"]["k2"] - now > 3600 * 0, md._TD["rest"])
+        check(datetime_utc(md._TD["rest"]["k2"]).hour == 0, "a daily limit rests until midnight UTC")
+        # the next request goes straight to the key that works
+        sess.calls.clear()
+        fresh()
+        md.get_candles("EURUSD", "15m", bars=200)
+        check({k for k, *_ in sess.calls} == {"k3"}, sess.calls)
+        # that key runs out too: the one after it takes over
+        keys["k3"] = "minute"
+        sess.calls.clear()
+        fresh()
+        check(md.get_candles("GBPUSD", "1h", bars=200)["source"] == "twelvedata", "k4 answers")
+        check([k for k, *_ in sess.calls] == ["k3", "k4"], sess.calls)
+        # every key resting: the free source answers, and Twelve Data is back once a key is ready
+        keys["k4"] = "day"
+        md._TD["rest"]["k1"] = md._TD["rest"]["k3"] = time.time() + 3600
+        fresh()
+        C = md.get_candles("EURUSD", "1h", bars=200)
+        check(C["source"] == "dukascopy" and not md.td_available(), C["source"])
+        md._TD["rest"]["k4"] = time.time() - 1
+        keys["k4"] = "ok"
+        C = md.get_candles("EURUSD", "1h", bars=200, refresh_s=0)
+        check(C["source"] == "twelvedata", C["source"])
+        # a symbol the plan doesn't include rests on the free sources, without spending a credit each time
+        sess.calls.clear()
+        fresh()
+        check(md.get_candles("XAUUSD", "1h", bars=200)["source"] != "twelvedata", "gold falls back")
+        fresh()
+        md.get_candles("XAUUSD", "1h", bars=200)
+        check(sum(1 for _, sym, _ in sess.calls if sym == "XAU/USD") == 1, sess.calls)
+        # a wrong key rests for an hour
+        keys["k4"] = "bad"
+        md._TD["rest"]["k3"] = time.time() - 1
+        keys["k3"] = "ok"
+        md._TD["i"] = 3
+        fresh()
+        check(md.get_candles("USDJPY", "1h", bars=200)["source"] == "twelvedata", "k3 after k4 is rejected")
+        check(md._TD["rest"]["k4"] - time.time() > 3000, md._TD["rest"])
+        # nothing in the window (a weekend) is not an error
+        check(len(md.fetch_twelvedata("EUR/USD", "1h", pd.Timestamp("2026-08-01 23:00", tz="UTC"),
+                                      pd.Timestamp("2026-08-02 20:00", tz="UTC"))) == 0, "weekend")
+        # the live chart doesn't spend a credit every 5 seconds
+        sess.calls.clear()
+        md.get_candles("USDJPY", "1h", bars=200, refresh_s=5)
+        check(not sess.calls, sess.calls)
+        check(c.get("/api/health").status_code == 200, "server fine")
+    finally:
+        for k, v in old_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        md._TD.update(i=0, rest={}, used={}, bad_symbol={}, last_error=None)
+        md.set_http(fake_web.Session())
+        fresh()
+
+
+def datetime_utc(ts):
+    from datetime import datetime as _dt, timezone as _tz
+    return _dt.fromtimestamp(ts, tz=_tz.utc)
+
+
 def main():
     t0 = time.time()
     with client() as c:
@@ -2005,7 +2239,8 @@ def main():
         run("t_admin_accounts", t_admin_accounts, client())
         run("t_security", t_security, client())
         for t in (t_terms_and_site, t_stage2, t_practice, t_strategy, t_scalp_template, t_tracker_rules, t_track_record, t_alerts, t_push, t_replay,
-                  t_learning_export, t_strategies, t_strategy_engine, t_heads, t_hud, t_watch, t_brokers, t_my_analyses, t_class_live, t_ideas, t_replay_gate):
+                  t_learning_export, t_strategies, t_strategy_engine, t_heads, t_hud, t_watch, t_brokers, t_my_analyses, t_class_live, t_ideas, t_replay_gate,
+                  t_levels_switch, t_short_chart, t_twelvedata):
             run(t.__name__, t, client())
     bad = [r for r in RESULTS if not r[1]]
     print(f"\n{len(RESULTS) - len(bad)}/{len(RESULTS)} passed in {time.time() - t0:.0f}s")

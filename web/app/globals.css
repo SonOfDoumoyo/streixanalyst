@@ -1792,6 +1792,18 @@ table.t tr:last-child td { border-bottom: 0; }
 .axh-target .seg button { flex: 1; padding: 5px 8px; font-size: 0.76rem; }
 .axh-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
 .ax-hero.none .axh-side { margin-top: 6px; font-size: 1.15rem; }
+/* reading only (entry, SL & TP off, or a market with too little history) */
+.ax-hero.read.flat::before { background: var(--text-3); }
+.ax-hero.read .axh-kind { color: var(--text-2); }
+.axh-note-plain { margin: 10px 0 0; font-size: 0.82rem; line-height: 1.5; color: var(--text-2); }
+.lv-switch { margin-top: 10px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg-2); }
+.lv-switch .ap-toggle { margin: 0; padding: 0; border: 0; background: transparent; }
+.lv-switch .switch-ui:disabled { opacity: 0.55; cursor: default; }
+.lv-all { margin-top: 8px; font-size: 0.8rem; color: var(--text-2); }
+.lv-short { margin-top: 8px; line-height: 1.45; }
+.short-chip { display: inline-flex; align-items: center; height: 18px; margin-left: 8px; padding: 0 7px; border-radius: 999px;
+  border: 1px solid rgba(245, 165, 36, 0.45); color: var(--warn); font-size: 0.7rem; font-weight: 700; }
+.hs-title.read { color: var(--text); }
 
 .ax-card { padding: 12px 14px 14px; border-radius: 14px; border: 1px solid var(--line); }
 .ax-h { display: flex; align-items: center; gap: 8px; min-height: 26px; }

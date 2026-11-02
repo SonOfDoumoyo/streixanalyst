@@ -41,6 +41,7 @@ export default function Providers({ children }) {
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
   const [toasts, setToasts] = useState([]);
   const saveTimer = useRef(null);
+  const savePending = useRef(0);         // a settings change not yet saved to the account (its number; 0 = none)
 
   const toast = useCallback((msg, type = "info", ms = 4500) => {
     const id = Math.random().toString(36).slice(2);
@@ -52,7 +53,10 @@ export default function Providers({ children }) {
   const applyUser = useCallback((u) => {
     setUser(u);
     const local = loadLocalSettings();
-    const merged = mergeSettings(mergeSettings(DEFAULT_SETTINGS, local || {}), (u && u.settings) || {});
+    // the account's copy wins, except over a change made here that is still waiting to be saved (it would undo it)
+    const merged = savePending.current
+      ? mergeSettings(mergeSettings(DEFAULT_SETTINGS, (u && u.settings) || {}), local || {})
+      : mergeSettings(mergeSettings(DEFAULT_SETTINGS, local || {}), (u && u.settings) || {});
     setSettings(merged);
   }, []);
 
@@ -81,9 +85,11 @@ export default function Providers({ children }) {
     setSettings((prev) => {
       const next = typeof fnOrPatch === "function" ? fnOrPatch(prev) : mergeSettings(prev, fnOrPatch);
       saveLocalSettings(next);
+      const seq = (savePending.current || 0) + 1;
+      savePending.current = seq;
       clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(() => {
-        patch("/auth/me", { settings: next }).catch(() => {});
+        patch("/auth/me", { settings: next }).catch(() => {}).finally(() => { if (savePending.current === seq) savePending.current = 0; });
       }, 1200);
       return next;
     });

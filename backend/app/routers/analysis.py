@@ -8,6 +8,7 @@ from ..db import get_db
 from ..deps import current_user, verified_user
 from ..models import AnalysisLog, User, iso, jdump, jload
 from ..plans import consume, features_of, refund, require_feature, tier_of
+from ..prefs import levels_on
 from ..services import engine, psychology, selflearn
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
@@ -23,6 +24,7 @@ class AnalyzeIn(BaseModel):
     drawings: list = Field(default_factory=list, max_length=60)
     strategies: list[str] | None = Field(None, max_length=60)      # None: the person's saved choice
     target_mode: str | None = Field(None, pattern="^(liquidity|winrate)$")   # TP1 at liquidity, or where most setups get
+    levels: bool | None = None          # entry, stop and targets; None: the person's saved choice for this pair (off)
 
 
 class WhatIfIn(BaseModel):
@@ -87,10 +89,12 @@ def run(body: AnalyzeIn, user: User = Depends(verified_user), db: Session = Depe
     require_feature(user, "analysis")
     consume(db, user, "analysis")
     mode = _mode(user, body.mode)
+    levels = body.levels if body.levels is not None else levels_on(user, body.symbol)
     try:
         res = engine.analyze(body.symbol.strip(), body.tf, account=body.account, risk_pct=body.risk_pct, mode=mode,
                              user_drawings=_clean_drawings(body.drawings), leverage=body.leverage,
-                             strategies=strategies_for(user, body.strategies), target_mode=body.target_mode)
+                             strategies=strategies_for(user, body.strategies), target_mode=body.target_mode,
+                             levels=levels)
     except engine.EngineError as e:
         refund(db, user, "analysis")
         raise HTTPException(422, str(e))

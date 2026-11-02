@@ -13,7 +13,8 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 /** The HUD block of an analysis. Analyses saved before the HUD existed get one from the verdict and the checklist. */
 export function hudOf(res) {
   if (!res) return null;
-  if (res.hud && !res.hud.error && Array.isArray(res.hud.flags)) return res.hud;
+  // a reading (entry, SL & TP off): the notes only, no checks to pass
+  if (res.hud && !res.hud.error && Array.isArray(res.hud.flags)) return res.hud.state === "read" ? { ...res.hud, met: 0, total: 0, checks: [] } : res.hud;
   const v = res.verdict || {};
   const p = res.plan;
   const checks = (p && Array.isArray(p.checklist) ? p.checklist : []).map((c) => ({ ok: !!c.ok, text: c.text, key: c.key || null }));
@@ -296,7 +297,8 @@ export default function ChartHud({ eng, res, mobile, dec = 2, showLevels = true,
     const above = res && Number.isFinite(res.price) ? f.price > res.price : true;
     onAlert({ price: f.price, op: above ? "above" : "below", note: f.title });
   };
-  const stateWord = hud.state === "go" || hud.state === "best" ? (hud.entry && hud.entry.side === "short" ? "sell" : "buy") : hud.state;
+  const stateWord = hud.state === "go" || hud.state === "best" ? (hud.entry && hud.entry.side === "short" ? "sell" : "buy")
+    : hud.state === "read" ? (hud.lean === "long" ? "buy" : hud.lean === "short" ? "sell" : "read") : hud.state;
   const pathD = L.path ? L.path.map((q, i) => `${i ? "L" : "M"}${q.x.toFixed(1)} ${q.y.toFixed(1)}`).join(" ") : null;
   const tail = L.path && L.path.length > 1 ? (() => {
     const a = L.path[L.path.length - 2];
@@ -431,7 +433,7 @@ export default function ChartHud({ eng, res, mobile, dec = 2, showLevels = true,
       {!mobile && L.why ? (
         <div className="hud-why" data-hid="why" style={{ left: L.why.x, top: L.why.y, width: L.why.w, maxHeight: L.why.max, ...seq() }}>
           <button className="hw-head" onClick={() => setWhyOpen(!L.why.open)} aria-expanded={L.why.open}>
-            <b>{hud.state === "go" ? "Before you enter" : hud.state === "dont" ? "What the chart shows" : "Why it isn't confirmed"}</b>
+            <b>{hud.state === "go" ? "Before you enter" : hud.state === "dont" || hud.state === "read" ? "What the chart shows" : "Why it isn't confirmed"}</b>
             <span>{hud.total ? `${hud.met} of ${hud.total} checks pass` : `${numbered.length} notes`}</span>
             <i className={`chev${L.why.open ? " up" : ""}`}>⌃</i>
           </button>

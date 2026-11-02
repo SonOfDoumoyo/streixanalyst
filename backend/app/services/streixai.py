@@ -110,6 +110,14 @@ def system_prompt(user, tier, ctx=None, model_note=None):
                      "'practice' in the context: score, what they did well, what to improve, the levels they missed). "
                      "Coach them: be encouraging and specific, explain each missed level and why it matters, and give "
                      "one concrete drill for next time.")
+    if ctx and (ctx.get("levels_off") or ctx.get("short")):
+        parts.append("TRADE LEVELS ARE OFF for this chart"
+                     + (" (the market has too few candles for them)" if ctx.get("short") else
+                        " (the user switched entry, stop loss and take profit off for this pair)")
+                     + ". Do not give an entry price, stop loss, take profit or position size, and don't work them "
+                     "out from the levels in the context. Discuss structure, liquidity, the strategies, the lean and "
+                     "the odds instead. If they want levels, tell them to switch on 'Entry, SL & TP' for this pair in "
+                     "the Analysis panel and analyse again.")
     if ctx:
         parts.append("CHART CONTEXT (the user's latest analysis, JSON):\n" + json.dumps(ctx, default=str)[:14000])
     else:

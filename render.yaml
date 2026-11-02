@@ -33,10 +33,8 @@ services:
         sync: false          # Google AI Studio key; StreixAI uses Gemini, and falls back between models with keys
       - key: GEMINI_MODEL
         sync: false
-      - key: TWELVEDATA_ENABLED
-        sync: false          # set to 1 once you have a Twelve Data plan
-      - key: TWELVEDATA_API_KEY
-        sync: false
+      - key: TWELVEDATA_API_KEYS
+        sync: false          # Twelve Data keys, comma separated: used one after another as each runs out of credits
       - key: METAAPI_TOKEN
         sync: false          # metaapi.cloud token (paid): switches on "Connect MetaTrader" for everyone
       - key: BROKER_KEY

@@ -123,9 +123,10 @@ def _norm_tf(tf):
         raise EngineError(str(e))
 
 
-def _get(symbol, tf, bars, refresh_s, min_bars=30, end=None):
+def _get(symbol, tf, bars, refresh_s, min_bars=30, end=None, allow_short=False):
     try:
-        return md.get_candles(symbol, tf, bars=bars, refresh_s=refresh_s, min_bars=min_bars, end=end)
+        return md.get_candles(symbol, tf, bars=bars, refresh_s=refresh_s, min_bars=min_bars, end=end,
+                              allow_short=allow_short)
     except md.DataError as e:
         msg = str(e)
         if "Tried" in msg:
@@ -153,7 +154,8 @@ def _meta(C):
     return dict(symbol=C["query"], display=C["symbol"], tf=C["tf"], source=C["source"], asset_class=C["asset_class"],
                 sub=C["sub"], base=C["base"], quote=C["quote"], decimals=C["decimals"], price=C["price"],
                 forming=C["forming"] is not None, perp=bool(spec.get("perp")), tf_seconds=md.TF_MIN[C["tf"]] * 60,
-                age_minutes=C["age_minutes"])
+                age_minutes=C["age_minutes"], short=bool(C.get("short")), candles_needed=C.get("need"),
+                analysis_needs=ga.need_for(C["tf"]) if C["tf"] in md.TF_MIN else None)
 
 
 def parse_moment(value):
@@ -185,7 +187,7 @@ def _custom(symbol, tf, bars, at=None, ahead=0, latest_only=False):
     minutes = md.TF_MIN[base] * k
     if at is not None:
         t, end = window_end(at, base, ahead * k)
-        C = _get(symbol, base, min(5000, bars * k + k), refresh_s=3600, end=end)
+        C = _get(symbol, base, min(5000, bars * k + k), refresh_s=3600, end=end, allow_short=True)
         df = C["df"]
     else:
         C = _get(symbol, base, min(5000, (5 if latest_only else bars) * k + k), refresh_s=5, min_bars=1)
@@ -216,10 +218,11 @@ def candles(symbol, tf, bars=600, at=None, ahead=0):
     tf = _norm_tf(tf)
     bars = int(min(max(bars, 50), 5000))
     if at is None:
-        C = _get(symbol, tf, bars, refresh_s=5 if md.TF_MIN[tf] < 1440 else 30)
+        # a market with little history (a new listing) still loads: whatever candles exist, marked short
+        C = _get(symbol, tf, bars, refresh_s=5 if md.TF_MIN[tf] < 1440 else 30, allow_short=True)
         return dict(_meta(C), candles=candles_payload(C))
     t, end = window_end(at, tf, ahead)
-    C = _get(symbol, tf, bars, refresh_s=3600, end=end)
+    C = _get(symbol, tf, bars, refresh_s=3600, end=end, allow_short=True)
     return dict(_meta(C), replay_at=t.isoformat(), candles=candles_payload(C, include_forming=False))
 
 
@@ -302,22 +305,24 @@ def _attach_news(res, spec, tf):
 
 
 def analyze(symbol, tf, account=1000.0, risk_pct=1.0, mode="pro", user_drawings=None, leverage=None, at=None,
-            strategies=None, target_mode=None):
+            strategies=None, target_mode=None, levels=True):
     """The analysis. With `at` it is a replay: run as it would have been at that moment, from candles that had closed
-    by then. Today's headlines are left out, because they did not exist then."""
+    by then. Today's headlines are left out, because they did not exist then.
+    `levels=False`: the reading only, with no entry, stop or target (the person's choice for this pair). A market
+    with too little history is always read that way."""
     tf = _norm_tf(tf)
     spec = spec_of(symbol)
     asof = parse_moment(at) if at is not None else None
     if not _sem.acquire(timeout=60):
         raise EngineError("The analyst is busy right now. Try again in a few seconds.")
     try:
-        C = _get(symbol, tf, ga.BARS[tf], refresh_s=8 if asof is None else 3600, end=asof)
+        C = _get(symbol, tf, ga.BARS[tf], refresh_s=8 if asof is None else 3600, end=asof, allow_short=True)
         if asof is not None:
             _pin_age(C, asof)
         try:
             res = ga.analyze(symbol, tf, account=float(account), risk_pct=float(risk_pct), mode=mode,
                              user_drawings=user_drawings or None, brain=brain(), leverage=leverage, data=C, asof=asof,
-                             strategies=strategies, target_mode=target_mode)
+                             strategies=strategies, target_mode=target_mode, levels=levels)
         except ValueError as e:
             raise EngineError(str(e))
         res = ga.jsonable(res)
@@ -363,7 +368,8 @@ def grade_user_drawings(res, drawings):
 
 def status():
     return dict(brain=dict(status=BRAIN["status"], detail=BRAIN["detail"], path=BRAIN["path"]),
-                blocked_sources=exchanges.blocked_sources(), workers=settings.analysis_workers)
+                blocked_sources=exchanges.blocked_sources(), workers=settings.analysis_workers,
+                twelvedata=md.td_status())
 
 
 def summarize(res, report_chars=5000):
@@ -390,7 +396,8 @@ def summarize(res, report_chars=5000):
         probabilities=res.get("probabilities"), session=res.get("session"), model=res.get("model"),
         news=dict(risk=nw.get("risk"), note=nw.get("note"), events=(nw.get("events") or [])[:5],
                   headlines=[h.get("title") for h in (nw.get("headlines") or [])[:5]]),
-        user_drawings=res.get("user_drawings"), learning=res.get("learning"),
+        user_drawings=res.get("user_drawings"), learning=res.get("learning"), levels_off=bool(res.get("levels_off")),
+        short=res.get("short"),
         asset_class=(res.get("meta") or {}).get("asset_class"),
         report=(res.get("report") or "")[:report_chars])
 

@@ -24,6 +24,7 @@ from sqlalchemy import select
 from ..config import settings
 from ..db import SessionLocal
 from ..models import Notification, StrategyWatch, User, jdump, jload, utcnow
+from ..prefs import levels_on
 from . import brokers, engine, mailer, push
 
 import market_data as md   # noqa: E402  (engine put guru/ on the path)
@@ -91,8 +92,9 @@ def scan_pair(symbol, tf, ids):
     return dict(symbol=C["symbol"], tf=tf, bar=int(times[-1]), decimals=C["decimals"], price=price, signals=out)
 
 
-def message(sig, symbol, tf, dec):
-    """(title, plain text body) of one alert."""
+def message(sig, symbol, tf, dec, levels=True):
+    """(title, plain text body) of one alert. levels=False (the person has entry/SL/TP off for this pair): the side and
+    the setup only, no prices to enter, stop or take profit at."""
     if sig["fixed_time"]:
         word = "UP (buy)" if sig["dir"] == 1 else "DOWN (sell)"
         title = f"{sig['name']}: {word} call on {symbol} {tf}"
@@ -101,6 +103,13 @@ def message(sig, symbol, tf, dec):
         return title, body
     side = "Buy" if sig["dir"] == 1 else "Sell"
     title = f"{sig['name']}: {side} setup on {symbol} {tf}"
+    if not levels:
+        ago = "" if not sig["age"] else f" The signal came {sig['age']} candle{'s' if sig['age'] != 1 else ''} ago."
+        body = (f"{sig['name']} found a {side.lower()} setup on {symbol} {tf}.{ago}\n"
+                "Open the chart and press Analyse for the full reading. Entry, stop loss and take profit are off for "
+                "this pair (turn them on in the Analysis panel).\n"
+                "Check the chart before you trade; no strategy wins every time.")
+        return title, body
     how = ("Enter now at about" if sig["kind"] == "market" else "Wait for price to come back to")
     late = ""
     if sig["age"] >= 1:
@@ -170,8 +179,9 @@ def apply_scan(db, w, user, res, now, quiet=False):
         seen[key] = sig["bar"]
         if not quiet:
             fresh.append(sig)
+    show = levels_on(user, res["symbol"]) or bool(w.auto_send and w.broker_id)
     for sig in fresh:
-        title, body = message(sig, res["symbol"], res["tf"], res["decimals"])
+        title, body = message(sig, res["symbol"], res["tf"], res["decimals"], levels=show)
         if w.auto_send and w.broker_id:
             try:
                 note = brokers.auto_place(db, user, w, sig, res["symbol"])

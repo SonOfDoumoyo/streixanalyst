@@ -428,21 +428,93 @@ def _empty():
     return clean(None)
 
 
-# ───────────────────────── Twelve Data (paid plan for most metals and indices) ─────────────────────────
-# Off unless TWELVEDATA_ENABLED=1 and TWELVEDATA_API_KEY is set. While it is off, nothing changes: the free sources answer.
+# ───────────────────────── Twelve Data: forex, metals, indices and stocks, on up to 10+ API keys ─────────────────────────
+# On when at least one key is set (TWELVEDATA_ENABLED=0 switches it off). Keys: TWELVEDATA_API_KEYS (comma, space or
+# newline separated), TWELVEDATA_API_KEY (one key, or several with commas) and TWELVEDATA_API_KEY_1 … _50.
+# One key is used until Twelve Data says its credits are used up (for the minute or for the day); then the next key
+# takes over, round the ring. When every key is resting, the free sources (Dukascopy, Yahoo) answer, and Twelve Data
+# is tried again as soon as a key is ready. A key Twelve Data rejects (wrong or cancelled) rests for an hour.
 TD_IV = {"1m": "1min", "5m": "5min", "15m": "15min", "30m": "30min", "1h": "1h", "4h": "4h", "1D": "1day",
          "1W": "1week", "1M": "1month"}
-# Twelve Data names for metals and indices. Check each one with a test call. A name Twelve Data rejects falls back to
-# the free sources, so the chart keeps working.
+# Twelve Data names for metals and indices. A name Twelve Data rejects (or that the plan doesn't include) rests for
+# six hours and the free sources answer meanwhile, so the chart keeps working.
 TD_SYMBOL = {"XAUUSD": "XAU/USD", "XAGUSD": "XAG/USD", "XPTUSD": "XPT/USD", "XPDUSD": "XPD/USD",
              "US30": "DJI", "NAS100": "NDX", "US500": "SPX", "US2000": "RUT", "VIX": "VIX",
              "UK100": "FTSE", "JP225": "N225", "HK50": "HSI"}
 NATIVE["twelvedata"] = {"1m": "1m", "5m": "5m", "15m": "15m", "30m": "30m", "1h": "1h", "4h": "4h", "1D": "1D",
                         "3D": "1D", "1W": "1W", "1M": "1M"}
+# Live charts ask for the newest candles every few seconds. Twelve Data charges a credit per request, so its candles are
+# re-fetched at most every TWELVEDATA_MIN_REFRESH seconds (default 20); in between, the cached candles are served.
+TD_KEY_REST = 3600              # a rejected key (wrong / cancelled) is left alone this long, in seconds
+TD_SYMBOL_REST = 6 * 3600       # a symbol Twelve Data won't serve is left to the free sources this long
+_TD = {"i": 0, "rest": {}, "used": {}, "bad_symbol": {}, "lock": None, "last_error": None}
+
+
+def _td_lock():
+    if _TD["lock"] is None:
+        import threading
+        _TD["lock"] = threading.Lock()
+    return _TD["lock"]
+
+
+def td_keys():
+    """Every Twelve Data key in the environment, in order, without repeats."""
+    raw = [os.environ.get("TWELVEDATA_API_KEYS", ""), os.environ.get("TWELVEDATA_API_KEY", "")]
+    raw += [os.environ.get(f"TWELVEDATA_API_KEY_{i}", "") for i in range(1, 51)]
+    out = []
+    for chunk in raw:
+        for k in re.split(r"[\s,;]+", chunk or ""):
+            k = k.strip().strip('"').strip("'")
+            if k and k not in out:
+                out.append(k)
+    return out
 
 
 def twelvedata_on():
-    return os.environ.get("TWELVEDATA_ENABLED", "0").strip().lower() in ("1", "true", "yes", "on")
+    flag = os.environ.get("TWELVEDATA_ENABLED", "").strip().lower()
+    if flag in ("0", "false", "no", "off"):
+        return False
+    return bool(td_keys())
+
+
+def _td_ready(key, now=None):
+    until = _TD["rest"].get(key)
+    return until is None or (now or time.time()) >= until
+
+
+def td_min_refresh():
+    try:
+        return max(5, int(os.environ.get("TWELVEDATA_MIN_REFRESH", "20")))
+    except ValueError:
+        return 20
+
+
+def td_available():
+    """Is any key ready to use right now?"""
+    if not twelvedata_on():
+        return False
+    now = time.time()
+    return any(_td_ready(k, now) for k in td_keys())
+
+
+def _next_midnight_utc(now):
+    d = datetime.fromtimestamp(now, tz=timezone.utc)
+    return (datetime(d.year, d.month, d.day, tzinfo=timezone.utc) + timedelta(days=1, minutes=1)).timestamp()
+
+
+def td_status():
+    """For the admin page: each key (masked), whether it is ready, until when it rests, calls made with it."""
+    now = time.time()
+    keys = td_keys()
+    cur = keys[_TD["i"] % len(keys)] if keys else None
+    rows = []
+    for k in keys:
+        until = _TD["rest"].get(k)
+        rows.append(dict(key=(k[:4] + "…" + k[-3:]) if len(k) > 8 else "…", ready=_td_ready(k, now), current=k == cur,
+                         rests_until=None if not until or until <= now else
+                         datetime.fromtimestamp(until, tz=timezone.utc).isoformat(), calls=_TD["used"].get(k, 0)))
+    return dict(on=twelvedata_on(), keys=len(keys), ready=sum(r["ready"] for r in rows), items=rows,
+                last_error=_TD["last_error"])
 
 
 def td_candidates(clean_name, asset_class, base, quote):
@@ -458,19 +530,92 @@ def td_candidates(clean_name, asset_class, base, quote):
     return []
 
 
+class TDKeysResting(DataError):
+    """Every Twelve Data key has used its credits (or was rejected): the free sources answer until one is ready."""
+
+
+class TDSymbolRefused(SymbolNotFound):
+    """Twelve Data doesn't know this symbol, or the plan doesn't include it."""
+
+
+def _td_call(params):
+    """One Twelve Data request on the current key; on 'out of credits' (or a rejected key) the next ready key is tried,
+    round the ring. Returns the JSON body."""
+    keys = td_keys()
+    if not keys:
+        raise DataError("Twelve Data has no API key")
+    tried = 0
+    while tried < len(keys):
+        with _td_lock():
+            now = time.time()
+            key = None
+            for step in range(len(keys)):
+                k = keys[(_TD["i"] + step) % len(keys)]
+                if _td_ready(k, now):
+                    _TD["i"] = (_TD["i"] + step) % len(keys)
+                    key = k
+                    break
+        if key is None:
+            raise TDKeysResting("every Twelve Data key is resting (credits used up)")
+        tried += 1
+        try:
+            r = _session().get("https://api.twelvedata.com/time_series", params=dict(params, apikey=key),
+                               headers={"User-Agent": UA, "Accept": "application/json"}, timeout=20)
+        except Exception as e:                                       # network: the next source answers
+            raise DataError(f"Twelve Data unreachable: {type(e).__name__}")
+        _TD["used"][key] = _TD["used"].get(key, 0) + 1
+        http = int(getattr(r, "status_code", 200))
+        try:
+            js = r.json()
+        except Exception:
+            js = {}
+        code = int(js.get("code") or http) if isinstance(js, dict) and js.get("status") == "error" else http
+        msg = str(js.get("message") if isinstance(js, dict) else "")[:200]
+        if code == 429:                      # this key's credits are used up: rest it, use the next one
+            now = time.time()
+            daily = "day" in msg.lower() or "daily" in msg.lower()
+            with _td_lock():
+                _TD["rest"][key] = _next_midnight_utc(now) if daily else (math.floor(now / 60) + 1) * 60 + 2
+                _TD["i"] = (keys.index(key) + 1) % len(keys)
+                _TD["last_error"] = f"key {keys.index(key) + 1}: {msg[:120]}"
+            continue
+        if code == 401:                      # wrong / cancelled key: rest it for an hour, use the next one
+            with _td_lock():
+                _TD["rest"][key] = time.time() + TD_KEY_REST
+                _TD["i"] = (keys.index(key) + 1) % len(keys)
+                _TD["last_error"] = f"key {keys.index(key) + 1} rejected: {msg[:120]}"
+            continue
+        if code >= 500:
+            raise DataError(f"Twelve Data HTTP {code}")
+        if "no data" in msg.lower():         # nothing in that window (a weekend, a holiday): not an error
+            return dict(status="ok", values=[])
+        if code in (403, 404):
+            raise TDSymbolRefused(f"Twelve Data: {msg or code}")
+        if code == 400:
+            raise SymbolNotFound(f"Twelve Data: {msg or code}")
+        if code != 200 or not isinstance(js, dict):
+            raise DataError(f"Twelve Data HTTP {code}: {msg}")
+        return js
+    raise TDKeysResting("every Twelve Data key is resting (credits used up)")
+
+
 def fetch_twelvedata(native, tf, start, end):
-    """Twelve Data time series. Needs TWELVEDATA_API_KEY. Any error falls through to the next source."""
-    key = os.environ.get("TWELVEDATA_API_KEY", "").strip()
-    if not key:
-        raise DataError("Twelve Data is on but TWELVEDATA_API_KEY is empty")
+    """Twelve Data time series on the key ring. Any error falls through to the next source."""
+    bad = _TD["bad_symbol"].get(native)
+    if bad and time.time() < bad:
+        raise SymbolNotFound(f"Twelve Data doesn't serve {native} on this plan")
     s = pd.Timestamp(start).tz_convert("UTC").strftime("%Y-%m-%d %H:%M:%S")
     e = pd.Timestamp(end).tz_convert("UTC").strftime("%Y-%m-%d %H:%M:%S")
-    js = _get_json("https://api.twelvedata.com/time_series",
-                   dict(symbol=native, interval=TD_IV[tf], start_date=s, end_date=e, outputsize=5000,
-                        timezone="UTC", order="ASC", format="JSON", apikey=key))
-    if not isinstance(js, dict) or js.get("status") == "error" or "values" not in js:
-        msg = js.get("message") if isinstance(js, dict) else js
-        raise SymbolNotFound(f"Twelve Data: {str(msg)[:160]}")
+    try:
+        js = _td_call(dict(symbol=native, interval=TD_IV[tf], start_date=s, end_date=e, outputsize=5000,
+                           timezone="UTC", order="ASC", format="JSON"))
+    except TDSymbolRefused:
+        _TD["bad_symbol"][native] = time.time() + TD_SYMBOL_REST
+        raise
+    if js.get("status") == "error" or "values" not in js:
+        if "no data" in str(js.get("message", "")).lower():
+            return _empty()
+        raise SymbolNotFound(f"Twelve Data: {str(js.get('message', js))[:160]}")
     values = js.get("values") or []
     if not values:
         return _empty()
@@ -721,10 +866,13 @@ def _transform(df, tf, base_tf, asset_class):
     return df
 
 
-def get_candles(symbol, tf="1h", bars=1000, start=None, end=None, refresh_s=None, min_bars=30, verbose=False):
+def get_candles(symbol, tf="1h", bars=1000, start=None, end=None, refresh_s=None, min_bars=30, verbose=False,
+                allow_short=False):
     """Closed candles + the forming candle for any symbol/timeframe.
+    `allow_short`: when no source has `min_bars` candles (a new listing, a market with little history), the longest
+    history any source has is returned anyway, marked short=True, instead of failing.
     Returns dict(symbol, tf, source, native, asset_class, sub, base, quote, df, forming, price, decimals,
-    last_close_time, age_minutes)."""
+    last_close_time, age_minutes, short, need)."""
     tf = norm_tf(tf)
     spec = parse_symbol(symbol)
     now = utcnow()
@@ -740,7 +888,11 @@ def get_candles(symbol, tf="1h", bars=1000, start=None, end=None, refresh_s=None
     if spec["key"] in _WORKING and _WORKING[spec["key"]] in cands:
         cands.remove(_WORKING[spec["key"]])
         cands.insert(0, _WORKING[spec["key"]])
-    errors, df, used = [], None, None
+    td = [c for c in cands if c[0] == "twelvedata"]
+    if td and not spec["forced"] and td_available():         # back to Twelve Data as soon as a key is ready again
+        cands.remove(td[0])
+        cands.insert(0, td[0])
+    errors, df, used, short = [], None, None, None
     for source, native in cands:
         blocked = _BLOCKED.get(source)
         if blocked and not spec["forced"]:
@@ -754,10 +906,13 @@ def get_candles(symbol, tf="1h", bars=1000, start=None, end=None, refresh_s=None
             bstart = start
             if base_tf == "1D" and tf in ("3D", "1W", "1M"):
                 bstart = start - pd.Timedelta(days=40)
-            raw = _series(source, native, base_tf, bstart, end, refresh_s)
+            raw = _series(source, native, base_tf, bstart, end,
+                          max(refresh_s, td_min_refresh()) if source == "twelvedata" else refresh_s)
             d = _transform(raw, tf, base_tf, spec["asset_class"])
             d = d[d.index >= start - (tf_delta(tf) or pd.Timedelta(days=31))]
             if len(d) < min_bars:
+                if allow_short and len(d) and (short is None or len(d) > len(short[0])):
+                    short = (d, (source, native))
                 raise SymbolNotFound(f"only {len(d)} candles")
             df, used = d, (source, native)
             break
@@ -769,9 +924,13 @@ def get_candles(symbol, tf="1h", bars=1000, start=None, end=None, refresh_s=None
             errors.append(f"{source}: {type(e).__name__}: {str(e)[:160]}")
         if verbose:
             print("  ", errors[-1])
+    is_short = False
+    if df is None and short is not None:
+        (df, used), is_short = short, True
     if df is None:
         raise DataError(f"No data for {symbol} {tf}. Tried → " + " | ".join(errors))
-    _WORKING[spec["key"]] = used
+    if not is_short:
+        _WORKING[spec["key"]] = used
     closed, forming = split_forming(df, tf, now)
     if pinned:
         # keep only candles that had closed by `end`: a candle still open at `end` holds prices from after it
@@ -788,7 +947,8 @@ def get_candles(symbol, tf="1h", bars=1000, start=None, end=None, refresh_s=None
                 decimals=price_decimals(np.r_[closed["close"].to_numpy()[-300:], price], spec["asset_class"],
                                         spec["quote"]),
                 last_close_time=last_close,
-                age_minutes=None if last_close is None else round((now - last_close).total_seconds() / 60, 1))
+                age_minutes=None if last_close is None else round((now - last_close).total_seconds() / 60, 1),
+                short=is_short, need=int(min_bars) if is_short else None)
 
 
 def history(symbol, tf, years=None, start=None, verbose=True):

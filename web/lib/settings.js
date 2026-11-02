@@ -27,7 +27,8 @@ export const DEFAULT_SETTINGS = {
   },
   indicators: { ema20: false, ema50: true, ema200: true, bb: false, vwap: false },
   analysis: { detail: 2, animate: true, account: 1000, risk_pct: 1, leverage: "", mode: "auto", showAlt: false, directionView: "range",
-    showLevels: true,          // off: analysis only, no entry / stop / target anywhere
+    levelsAll: false,          // entry, stop loss and take profit on every pair (off: the analyst's reading only)
+    levelsPairs: [],           // the pairs the person turned entry, SL and TP on for (see levelsOn below)
     targetMode: "liquidity",   // TP1 at the first liquidity level, or "winrate": where about 68% of similar setups got
     hud: true,                 // the reasons on the chart after Analyse
     fixedTime: false },        // the person also trades fixed time (shows the up/down card first)
@@ -70,6 +71,28 @@ export const CHART_BACKGROUNDS = [
 ];
 
 const isObj = (v) => v && typeof v === "object" && !Array.isArray(v);
+
+// One spelling per pair, the same as the server's (app/prefs.py): "OANDA:EUR/USD" and "eurusd" are the same pair.
+export function pairKey(symbol) {
+  return String(symbol || "").toUpperCase().trim().split(":").pop().replace(/[^A-Z0-9.!_]/g, "");
+}
+
+// Entry, stop loss and take profit are off unless the person turns them on, for one pair or for all of them.
+export function levelsOn(settings, symbol) {
+  const a = (settings && settings.analysis) || {};
+  if (a.levelsAll === true) return true;
+  const key = pairKey(symbol);
+  return Array.isArray(a.levelsPairs) && a.levelsPairs.some((p) => pairKey(p) === key);
+}
+
+// The settings patch that turns entry/SL/TP on or off for one pair (all = the "every pair" switch).
+export function levelsPatch(settings, symbol, on, all = false) {
+  const a = (settings && settings.analysis) || {};
+  if (all) return { analysis: { levelsAll: !!on } };
+  const key = pairKey(symbol);
+  const rest = (Array.isArray(a.levelsPairs) ? a.levelsPairs : []).filter((p) => pairKey(p) !== key);
+  return { analysis: { levelsPairs: on ? [...rest, key].slice(-500) : rest } };
+}
 
 export function mergeSettings(base, over) {
   if (!isObj(over)) return base;

@@ -17,7 +17,7 @@ import PineSheet from "@/components/terminal/PineSheet";
 import { ApiError, del, get, post, put, qs } from "@/lib/api";
 import { aiToDrawings, ANALYSIS_STEPS, gradeClass, toOverlay, toUserDrawings, verdictTone } from "@/lib/analysis";
 import { ALL_TFS, analysisTf, cleanSymbol, fmtChange, fmtPrice, initials, TF_LABEL, TFS } from "@/lib/format";
-import { localGet, localSet } from "@/lib/settings";
+import { levelsOn, localGet, localSet } from "@/lib/settings";
 import SymbolSearch from "./SymbolSearch";
 import { StyleBar, TOOL_KEYS } from "./DrawTools";
 import { DrawingStudio, ToolDock } from "./DrawingStudio";
@@ -272,8 +272,9 @@ export default function Terminal() {
     eng.current.setAnalysis(ov.items, { animate: false, pins: ov.pins });
   }, [theme]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // analysis only (no entry/stop/target): the plan layer is hidden on the chart too
-  const showLevels = settings.analysis.showLevels !== false;
+  // entry, stop and targets are off unless the person turns them on for this pair (or for all pairs); with them off
+  // the analyst gives its reading only, and the plan layer is hidden on the chart too
+  const showLevels = levelsOn(settings, symbol);
   useEffect(() => {
     if (!eng.current) return;
     const h = new Set(hiddenLayers);
@@ -557,6 +558,7 @@ export default function Terminal() {
         symbol, tf: atf, account: Number(a.account) || 1000, risk_pct: Number(a.risk_pct) || 1,
         leverage: a.leverage ? Number(a.leverage) : null, mode: a.mode === "auto" ? null : a.mode,
         target_mode: (o.targetMode || a.targetMode) === "winrate" ? "winrate" : "liquidity",
+        levels: typeof o.levels === "boolean" ? o.levels : showLevels,
         drawings: toUserDrawings(eng.current.getDrawings()),
       });
       storeAnalysisLocal(symbol, atf, d);
@@ -585,7 +587,7 @@ export default function Terminal() {
     } finally {
       setBusy(false);
     }
-  }, [busy, chartState.error, settings.analysis, symbol, tf, theme, narrow, mobile, refresh, toast, showLimit]);
+  }, [busy, chartState.error, settings.analysis, symbol, tf, theme, narrow, mobile, refresh, toast, showLimit, showLevels]);
 
   const cleanAnalysis = useCallback(() => {
     const sym = symbolRef.current;
@@ -1172,12 +1174,12 @@ export default function Terminal() {
           {mobile && res && !panelOpen && !busy && !showHud ? (
             <button className={`verdict-pill ${vTone}`} onClick={() => openTab("analysis")} style={{ bottom: drawMobile ? 70 : 34 }}>
               <div className="grow">
-                <b>{showLevels ? res.verdict.action : res.verdict.side === "long" ? "Leaning up" : res.verdict.side === "short" ? "Leaning down" : "No clear edge"}</b>
+                <b>{showLevels && !res.levels_off ? res.verdict.action : (res.verdict.lean || res.verdict.side) === "long" ? "Leaning up" : (res.verdict.lean || res.verdict.side) === "short" ? "Leaning down" : "No clear edge"}</b>
                 {res.plan && showLevels ? (
                   <div className="num faint" style={{ fontSize: "0.78rem" }}>EP {fmtPrice(res.plan.entry, dec)} · SL {fmtPrice(res.plan.sl, dec)} · TP {fmtPrice(res.plan.tps[0], dec)}</div>
                 ) : <div className="faint" style={{ fontSize: "0.78rem" }}>{res.verdict.confidence ? `${res.verdict.confidence.level} confidence` : ""}</div>}
               </div>
-              {showLevels ? <span className={`grade ${gradeClass(res.verdict.grade)}`} style={{ width: 34, height: 34 }}>{res.verdict.grade}</span> : null}
+              {showLevels && !res.levels_off ? <span className={`grade ${gradeClass(res.verdict.grade)}`} style={{ width: 34, height: 34 }}>{res.verdict.grade}</span> : null}
             </button>
           ) : null}
           {meta && !chartState.loading ? (
@@ -1190,6 +1192,7 @@ export default function Terminal() {
               ) : (
                 <><span className="live-dot" /> Live · {meta.source}</>
               )}
+              {meta.short ? <span className="short-chip" title="This market doesn't have much history yet. The chart shows every candle there is; the analysis gives a reading without entry, stop and targets.">{meta.candles ? meta.candles.length : ""} candles so far</span> : null}
             </div>
           ) : null}
         </div>

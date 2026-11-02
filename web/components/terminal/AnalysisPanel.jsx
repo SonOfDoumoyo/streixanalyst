@@ -8,6 +8,7 @@ import { gradeClass, LAYERS } from "@/lib/analysis";
 import DirectionBar from "@/components/DirectionBar";
 import PlanLadder from "@/components/terminal/PlanLadder";
 import { hudOf } from "@/components/terminal/ChartHud";
+import { levelsOn, levelsPatch } from "@/lib/settings";
 
 function Prob({ p, be, label }) {
   if (p === null || p === undefined) return null;
@@ -302,6 +303,56 @@ function More({ title, hint, children, tour, open = false }) {
   );
 }
 
+/** Entry, stop loss and take profit: off unless the person turns them on, for this pair or for every pair. Turning
+ *  them on after a reading-only analysis runs the analysis again with them. */
+export function LevelsSwitch({ symbol, symbolLabel, res, onAnalyse, busy }) {
+  const { settings, updateSettings } = useAuth();
+  const all = settings.analysis.levelsAll === true;
+  const on = levelsOn(settings, symbol);
+  const short = res && res.short;
+  const set = (next, every = false) => {
+    updateSettings(levelsPatch(settings, symbol, next, every));
+    if (next && res && res.levels_off && !short && onAnalyse && !busy) onAnalyse({ levels: true });
+  };
+  return (
+    <div className="lv-switch">
+      <label className="row ap-toggle">
+        <span className="grow"><b>Entry, SL &amp; TP on {symbolLabel || symbol}</b>
+          <small>{all ? "On for every pair" : on ? "On: the analyst gives an entry, stop loss and take profit" : "Off: the analyst's reading only, no trade levels"}</small></span>
+        <button className={`switch-ui${on ? " on" : ""}`} aria-pressed={on} disabled={all} aria-label={`Entry, stop loss and take profit on ${symbolLabel || symbol}`} onClick={() => set(!on)} />
+      </label>
+      <label className="check lv-all"><input type="checkbox" checked={all} onChange={(e) => set(e.target.checked, true)} /> Turn them on for every pair</label>
+      {short ? <div className="hint lv-short">This market has {res.short.candles} closed candles so far. Entry, stop and targets need {res.short.need}, so the analysis is a reading only until then.</div> : null}
+    </div>
+  );
+}
+
+/** With entry, SL and TP off (or on a market with too little history): which way the chart leans, the setup behind
+ *  it and how much weight it deserves, with no price to trade at. */
+function ReadHero({ res, onAsk }) {
+  const v = res.verdict || {};
+  const lean = v.lean || null;
+  const word = lean === "long" ? "Leaning up" : lean === "short" ? "Leaning down" : "No clear edge";
+  return (
+    <section className={`ax-hero read ${lean === "long" ? "long" : lean === "short" ? "short" : "flat"}`} data-tour="verdict">
+      <div className="axh-top">
+        <span className="axh-kind">{res.short ? "New market · reading" : "Reading"}</span>
+        <span className="axh-meta">{res.symbol} · {res.tf}</span>
+      </div>
+      <div className="axh-main"><b className="axh-side">{word}</b></div>
+      {v.strategy_name || v.setup ? <div className="axh-sub">{v.strategy_name ? <b>{v.strategy_name}</b> : null}{v.strategy_name && v.setup ? " · " : ""}{v.setup || ""}{v.grade && v.grade !== "—" ? ` · grade ${v.grade}` : ""}</div> : null}
+      <div className="axh-tags">
+        <Confidence c={v.confidence} />
+        {v.news_warning ? <span className="axh-tag bad">News soon</span> : null}
+      </div>
+      <p className="axh-note-plain">{v.headline}</p>
+      <div className="axh-actions">
+        <button className="btn sm ghost" onClick={() => onAsk(`Explain this ${res.symbol} ${res.tf} reading to me. Why is it ${word.toLowerCase()}?`)}><Icon name="sparkles" size={14} /> Ask why</button>
+      </div>
+    </section>
+  );
+}
+
 /** The best entry, first and large: side, entry, stop, targets (each one tap to copy), the tested odds, the grade,
  *  the target style, and what to do with it. */
 function EntryHero({ res, hud, dec, symbol, tf, toast, onEdit, onAlert, onAsk, onTargetMode, onSend, onPine, busy, showLevels }) {
@@ -396,7 +447,7 @@ function Reasons({ res, hud, dec, symbol, tf }) {
   const nOf = (key) => (flags.find((f) => f.key === key) || {}).n;
   const checks = hud.checks || [];
   const lvl = flags.find((f) => f.need && Number.isFinite(f.price));
-  const title = hud.state === "go" ? "Before you enter" : hud.state === "dont" ? "On the chart" : "Why it isn't confirmed";
+  const title = hud.state === "go" ? "Before you enter" : hud.state === "dont" || hud.state === "read" ? "On the chart" : "Why it isn't confirmed";
   return (
     <section className="ax-card">
       <header className="ax-h">
@@ -577,7 +628,8 @@ function StrategiesBody({ sb, onChange }) {
 
 export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk, onClean, onUpgrade, hiddenLayers, toggleLayer, layers, showAlt, setShowAlt, stale, symbolLabel, tf, symbol, onEditPlan, onStrategies, onTf, onFull, onSend, onPine }) {
   const { settings, updateSettings, can, user, toast } = useAuth();
-  const showLevels = settings.analysis.showLevels !== false;
+  // off unless the person turned them on for this pair; an analysis made without them has none to show either way
+  const showLevels = levelsOn(settings, symbol) && !(res && res.levels_off);
   if (busy && !res) {
     return (
       <div className="stack">
@@ -601,15 +653,12 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
         <div className="ready">
           <span className="ready-ic"><Icon name="zap" size={24} /></span>
           <h3>Read {symbolLabel} on {TF_LABEL[tf] || tf}</h3>
-          <p className="muted">The analyst marks structure and liquidity, checks every timeframe and the news, then gives the best entry{showLevels ? " with stop and targets" : ""} from {mine.length ? `your ${mine.length} strateg${mine.length > 1 ? "ies" : "y"} (or its own setups when they have none)` : "its own mix of setups"}.</p>
+          <p className="muted">The analyst marks structure and liquidity, checks every timeframe and the news, then {showLevels ? "gives the best entry with stop and targets" : "says which way the chart leans and why"} from {mine.length ? `your ${mine.length} strateg${mine.length > 1 ? "ies" : "y"} (or its own setups when they have none)` : "its own mix of setups"}.</p>
           <button className="btn primary block lg" onClick={onAnalyse}><Icon name="zap" size={18} /> Analyse {symbolLabel}</button>
           <button className="btn ghost block sm" onClick={onStrategies} style={{ marginTop: 8 }}><Icon name="target" size={14} /> {mine.length ? "Change strategies" : "Pick strategies first"}</button>
           <div className="hint" style={{ marginTop: 6 }}>Draw your own levels first if you want the analyst to check them.</div>
         </div>
-        <label className="row ap-toggle">
-          <span className="grow"><b>Show entry, stop and targets</b><small>Off: analysis only, no trade levels</small></span>
-          <button className={`switch-ui${showLevels ? " on" : ""}`} aria-pressed={showLevels} onClick={() => updateSettings({ analysis: { showLevels: !showLevels } })} />
-        </label>
+        <LevelsSwitch symbol={symbol} symbolLabel={symbolLabel} res={null} onAnalyse={null} busy={busy} />
         <div className="section-title">Your settings</div>
         <AnalysisOptions settings={settings} updateSettings={updateSettings} />
       </div>
@@ -636,8 +685,11 @@ export default function AnalysisPanel({ res, busy, step, steps, onAnalyse, onAsk
       {stale ? (
         <button className="ax-stale" onClick={onAnalyse}><Icon name="refresh" size={14} /> A new candle closed: analyse again</button>
       ) : null}
-      <EntryHero res={res} hud={hud} dec={dec} symbol={res.symbol || symbol} tf={res.tf} toast={toast} busy={busy} showLevels={showLevels}
-        onEdit={onEditPlan || null} onAlert={symbol ? planAlert : null} onAsk={onAsk} onTargetMode={setTargetMode} onSend={onSend || null} onPine={onPine || null} />
+      {res.levels_off ? <ReadHero res={res} onAsk={onAsk} /> : (
+        <EntryHero res={res} hud={hud} dec={dec} symbol={res.symbol || symbol} tf={res.tf} toast={toast} busy={busy} showLevels={showLevels}
+          onEdit={onEditPlan || null} onAlert={symbol ? planAlert : null} onAsk={onAsk} onTargetMode={setTargetMode} onSend={onSend || null} onPine={onPine || null} />
+      )}
+      <LevelsSwitch symbol={symbol} symbolLabel={symbolLabel} res={res} onAnalyse={onAnalyse} busy={busy} />
       {res.fixed_time && settings.analysis.fixedTime ? <FixedTime ft={res.fixed_time} /> : null}
       {conflict && conflict.buyers && conflict.sellers && conflict.buyers.length && conflict.sellers.length ? (
         <div className="ax-flag warn"><Icon name="alert" size={14} /> {conflict.note}</div>

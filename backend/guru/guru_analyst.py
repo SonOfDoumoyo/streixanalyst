@@ -772,8 +772,17 @@ def analyze_user_drawings(items, X, brain):
 
 
 # ───────────────────────────── main ─────────────────────────────
+def need_for(tf):
+    """Closed candles a full analysis (with entry, stop and targets) needs on this timeframe."""
+    return 60 if tf in ("3D", "1W", "1M") else 120
+
+
+MIN_READ = 5          # fewer closed candles than this: nothing to read at all
+
+
 def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_drawings=None, brain=None,
-            leverage=None, now=None, show_bars=SHOW_BARS, data=None, asof=None, strategies=None, target_mode=None):
+            leverage=None, now=None, show_bars=SHOW_BARS, data=None, asof=None, strategies=None, target_mode=None,
+            levels=True):
     """Full analysis of `symbol` on timeframe `tf` (1m 5m 15m 30m 1h 4h 1D 3D 1W 1M).
     `asof` (a replay): the analysis is run as it would have been at that moment. Every candle it reads, on every
     timeframe, had closed by then, and the clock is that moment.
@@ -782,18 +791,26 @@ def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_draw
     `target_mode`: "liquidity" (default) puts TP1 at the first level ≥ 1R; "winrate" puts TP1 where about 68% of
     similar setups got before their stop, with the liquidity target kept as TP2.
     There is always an entry: when the chosen strategies have no setup the analyst's own setups give the best one,
-    and when nothing is forming, the better side from the current price."""
+    and when nothing is forming, the better side from the current price.
+    `levels=False`: the reading only (structure, liquidity, strategies, odds, which way it leans) with no entry, stop or
+    target anywhere in the result, the report, the HUD or the chart drawings. A chart with fewer closed candles than
+    `need_for(tf)` (a new market) is always read this way: too little history to place a stop and targets."""
     t_start = time.time()
     brain = brain or _STATE["brain"] or gm.FallbackBrain()
     tf = md.norm_tf(tf)
     now = asof or now or md.utcnow()
     notes = []
     C = data or md.get_candles(symbol, tf, bars=BARS[tf])
-    need = 60 if tf in ("3D", "1W", "1M") else 120
-    if len(C["df"]) < need:
-        alt = {"1M": "1W", "1W": "1D", "3D": "1D"}.get(tf, "a higher timeframe")
-        raise ValueError(f"Only {len(C['df'])} closed {tf} candles for {C['symbol']} (need {need}). "
-                         f"Try {alt}.")
+    need = need_for(tf)
+    n_closed = len(C["df"])
+    short = n_closed < need
+    if n_closed < MIN_READ:
+        raise ValueError(f"{C['symbol']} has only {n_closed} closed {tf} candle{'s' if n_closed != 1 else ''} so far: "
+                         f"too few to read. Try a lower timeframe, or come back after a few more candles.")
+    if short:
+        levels = False
+        notes.append(f"Only {n_closed} closed {tf} candles (a full analysis with entry, stop and targets needs {need}): "
+                     "this is a reading of the chart only.")
     dfe, A = se.analyze(C["df"])
     n = len(dfe)
     ladder = gm.LADDER[tf]
@@ -1007,9 +1024,25 @@ def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_draw
     X["plans"], X["primary"], X["alternative"] = plans, primary, alternative
     X["conflict"] = pb.conflict(plans, X)
     X["fixed_time"] = _safe(lambda: pb.fixed_time(X, X["chosen"]), None, notes, "fixed-time view")
-    X["verdict"] = pb.soften(_verdict(primary, X), primary, X, pb.confidence(primary, X), X["conflict"])
+    X["levels"] = bool(levels)
+    if levels:
+        X["verdict"] = pb.soften(_verdict(primary, X), primary, X, pb.confidence(primary, X), X["conflict"])
+    else:
+        # the reading only: which way it leans and why, with no price to enter, stop or take profit at
+        X["verdict"] = _read_verdict(primary, X, short, need)
+        X["lead"] = primary
+        if X.get("fallback_note"):
+            X["fallback_note"] = ("None of your strategies has a setup right now, so the lean comes from the analyst's "
+                                  "own setups." if X["entry_source"] == "analyst" else None)
+        for p in plans:
+            p.pop("sizing", None)
+        X["plans"], X["primary"], X["alternative"] = [], None, None
+        primary = alternative = None
+        plans = []
     X["liq_map"] = _safe(lambda: pb.liquidity_map(X), None, notes, "liquidity map")
     X["hud"] = hud.build(X, primary, X["verdict"], now)
+    if not levels:
+        X["hud"] = _read_hud(X["hud"], X["verdict"])
     X["skill"] = model_skill(brain)
     X["notes"] = notes
     result = dict(
@@ -1029,10 +1062,14 @@ def analyze(symbol, tf="1h", account=1000.0, risk_pct=1.0, mode="pro", user_draw
         probabilities=X["prob"], model=X["skill"], user_drawings=X["user"], notes=notes,
         strategies=_strategies_block(X), mtf=X["mtf"], fixed_time=X["fixed_time"], liquidity=X["liq_map"],
         how_to_enter=pb.how_to_enter(primary, X), hud=X["hud"], entry_source=X["entry_source"],
-        fallback_note=X.get("fallback_note"), target_mode=X["target_mode"], layers_scope=st.layers_for(X["chosen"]) if X["chosen"] else None,
+        fallback_note=X.get("fallback_note") if levels else None, target_mode=X["target_mode"],
+        levels_off=not levels, short=dict(candles=n_closed, need=need) if short else None, layers_scope=st.layers_for(X["chosen"]) if X["chosen"] else None,
         disclaimer="Research tool, not financial advice. Probabilities are calibrated estimates from history; "
                    "markets change. Analysis may differ on other timeframes and changes with every new candle. "
                    "Paper-trade first and never risk money you can't afford to lose.")
+    if not levels:
+        result["mtf"] = _no_prices(result["mtf"])
+        result["strategies"] = _no_prices(result["strategies"])
     result["report_pro"] = report(X, beginner=False)
     result["report_beginner"] = report(X, beginner=True)
     result["report"] = result["report_beginner"] if mode == "beginner" else result["report_pro"]
@@ -1136,6 +1173,73 @@ def model_skill(brain):
                 model_avg_R=None if pick is None else float(pick["avg_net_R"]),
                 model_t=None if pick is None else float(pick["t_stat"]), edge_proven=bool(proven),
                 geometry_avg_R=None if geo is None else float(geo["avg_net_R"]))
+
+
+def _lean(p, X):
+    """Which way the chart leans (1, -1 or 0): the best setup's side, else the direction odds."""
+    if p is not None:
+        return int(p["dir"])
+    pr = X.get("prob") or {}
+    up, dn = float(pr.get("p_up") or 0), float(pr.get("p_down") or 0)
+    if abs(up - dn) >= 0.06:
+        return 1 if up > dn else -1
+    return int(X.get("trend") or 0)
+
+
+def _read_verdict(p, X, short, need):
+    """The verdict with trade levels off: the lean, the setup behind it, its grade and confidence, and no prices."""
+    d = _lean(p, X)
+    word = {1: "Leaning up", -1: "Leaning down", 0: "No clear edge"}[d]
+    conf = pb.confidence(p, X) if p is not None else dict(level="none", score=0.0, text="No setup on this chart.",
+                                                          reasons=[])
+    grade = p["grade"] if p is not None else "—"
+    cap = {"low": "C", "moderate": "B"}.get(conf.get("level"))     # the grade never says more than the confidence
+    order = ["A+", "A", "B", "C", "D"]
+    if cap and grade in order and order.index(grade) < order.index(cap):
+        grade = cap
+    what = ""
+    if p is not None:
+        what = (f"{p.get('strategy_name') + ': ' if p.get('strategy_name') else ''}{p['setup'].lower()} "
+                f"(grade {grade}). ")
+    elif X.get("chosen"):
+        price_ids = [i for i in X["chosen"] if not st.BY_ID[i]["fixed_time"]]
+        if price_ids:
+            what = "None of your strategies has a setup right now. "
+    if short:
+        why = (f"This market has only {len(X['df'])} closed {X['tf']} candles, and entry, stop and targets need {need}: "
+               "this is a reading of the chart only.")
+    else:
+        why = "Entry, stop loss and take profit are off for this pair: this is the analyst's reading only."
+    head = (f"{word}. {what}{why}" if d else f"{word}: buyers and sellers are balanced here. {what}{why}")
+    return dict(action=word.upper(), side=None, lean={1: "long", -1: "short", 0: None}[d], grade=grade,
+                score=p["score"] if p else None, headline=head, trade=False, best=False, levels_off=True,
+                short=bool(short), confidence=conf, setup=p["setup"] if p else None,
+                strategy=p.get("strategy") if p else None, strategy_name=p.get("strategy_name") if p else None,
+                tf_note=f"The reading can change with every new {X['tf']} candle.")
+
+
+PRICE_KEYS = {"entry", "sl", "tp", "tps", "rr", "zone", "chase_limit", "tp_labels"}
+
+
+def _no_prices(x):
+    """A copy without any entry, stop or target (the timeframe table and the strategy rows, with levels off)."""
+    if isinstance(x, dict):
+        return {k: _no_prices(v) for k, v in x.items() if k not in PRICE_KEYS}
+    if isinstance(x, list):
+        return [_no_prices(v) for v in x]
+    return x
+
+
+def _read_hud(h, v):
+    """The chart HUD with trade levels off: the lean and the reasons, no entry box or price path."""
+    if not isinstance(h, dict) or h.get("error"):
+        return h
+    out = dict(h, state="read", title={"long": "Leaning up", "short": "Leaning down"}.get(v.get("lean"), "No clear edge"),
+               sub="Too few candles for entry, stop and targets" if v.get("short") else "Entry, stop and targets off",
+               entry=None, path=None, headline=v.get("headline"), grade=None, levels_text=None, how=None,
+               lean=v.get("lean"))
+    out["summary"] = hud.compose(out)
+    return out
 
 
 def _verdict(p, X):

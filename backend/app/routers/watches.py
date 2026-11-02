@@ -12,6 +12,7 @@ from ..db import get_db
 from ..deps import current_user, verified_user
 from ..models import BrokerAccount, StrategyWatch, User, iso, jdump, jload
 from ..plans import limits_of, require_feature, tier_of
+from ..prefs import levels_on
 from ..services import brokers as bk
 from ..services import engine, mailer, watcher
 
@@ -98,9 +99,14 @@ def _tf(tf):
     return tf
 
 
-def _live(res):
-    return [dict(id=s["id"], name=s["name"], side=s["side"], kind=s["kind"], age=s["age"], entry=s.get("entry"),
-                 sl=s.get("sl"), tp=s.get("tp"), rr=s.get("rr")) for s in res["signals"]]
+def _live(res, show=True):
+    out = []
+    for s in res["signals"]:
+        row = dict(id=s["id"], name=s["name"], side=s["side"], kind=s["kind"], age=s["age"])
+        if show:
+            row.update(entry=s.get("entry"), sl=s.get("sl"), tp=s.get("tp"), rr=s.get("rr"))
+        out.append(row)
+    return out
 
 
 @router.get("")
@@ -129,7 +135,7 @@ def create_watch(body: WatchIn, user: User = Depends(verified_user), db: Session
     w.symbol = res["symbol"]
     db.add(w)
     db.commit()
-    return dict(watch=_out(w), live=_live(res))
+    return dict(watch=_out(w), live=_live(res, levels_on(user, w.symbol) or bool(w.auto_send)))
 
 
 @router.patch("/{wid}")

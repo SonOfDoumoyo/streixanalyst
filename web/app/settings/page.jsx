@@ -285,10 +285,23 @@ function SettingsInner() {
                   </div>
                 </div>
                 <label className="row ap-toggle">
-                  <span className="grow"><b>Show entry, stop and targets</b><small>Off: the analyst gives analysis only, with no trade levels</small></span>
-                  <button className={`switch-ui${settings.analysis.showLevels !== false ? " on" : ""}`} aria-pressed={settings.analysis.showLevels !== false}
-                    onClick={() => updateSettings({ analysis: { showLevels: settings.analysis.showLevels === false } })} />
+                  <span className="grow"><b>Entry, SL &amp; TP on every pair</b><small>Off: the analyst gives its reading only, unless you turn them on for a pair in the Analysis panel</small></span>
+                  <button className={`switch-ui${settings.analysis.levelsAll === true ? " on" : ""}`} aria-pressed={settings.analysis.levelsAll === true}
+                    onClick={() => updateSettings({ analysis: { levelsAll: settings.analysis.levelsAll !== true } })} />
                 </label>
+                {settings.analysis.levelsAll !== true && (settings.analysis.levelsPairs || []).length ? (
+                  <div className="field">
+                    <label>Pairs with entry, SL &amp; TP on</label>
+                    <div className="row wrap" style={{ gap: 6 }}>
+                      {(settings.analysis.levelsPairs || []).map((p) => (
+                        <button key={p} className="chip" title={`Turn entry, SL and TP off for ${p}`}
+                          onClick={() => updateSettings({ analysis: { levelsPairs: (settings.analysis.levelsPairs || []).filter((x) => x !== p) } })}>
+                          {p} <Icon name="x" size={12} />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <div className="field">
                   <label>Bull / bear bar</label>
                   <div className="seg brand">

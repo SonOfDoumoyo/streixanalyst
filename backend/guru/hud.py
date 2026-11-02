@@ -311,7 +311,7 @@ def _lower(s):
 
 def compose(hud):
     """The one-paragraph summary under the verdict, from the HUD's own fields."""
-    if hud.get("state") == "dont":
+    if hud.get("state") in ("dont", "read"):
         return hud.get("headline") or "No setup worth taking here."
     flags = [x for x in hud.get("flags") or [] if x.get("n")]
     steps = hud.get("steps") or []
