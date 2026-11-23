@@ -59,7 +59,7 @@ export function Menu({ open, onClose, anchorStyle, children, className = "" }) {
   }, [open, onClose]);
   if (!open) return null;
   return (
-    <div ref={ref} className={`menu glass ${className}`} style={anchorStyle}>
+    <div ref={ref} className={`menu glass ${className}`} style={{ ...anchorStyle, zIndex: 9999 }}>
       {children}
     </div>
   );
